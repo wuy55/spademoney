@@ -71,33 +71,33 @@ class MoneyTest {
         assertThat(Money.of(amount, USD).hashCode()).isEqualTo(Money.of(amount, USD).hashCode());
     }
 
-    // // ---------- Arithmetic ----------
+    // ---------- Arithmetic ----------
 
-    // @Property
-    // void plusIsCommutative(@ForAll @LongRange(min = 1, max = 1_000_000_000L) long a,
-    //                        @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
-    //     assertThat(Money.of(a, USD).plus(Money.of(b, USD)))
-    //             .isEqualTo(Money.of(b, USD).plus(Money.of(a, USD)));
-    // }
+    @Property
+    void plusIsCommutative(@ForAll @LongRange(min = 1, max = 1_000_000_000L) long a,
+                           @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
+        assertThat(Money.of(a, USD).plus(Money.of(b, USD)))
+                .isEqualTo(Money.of(b, USD).plus(Money.of(a, USD)));
+    }
 
-    // @Property
-    // void plusAddsMinorUnitsExactly(@ForAll @LongRange(min = 1, max = 1_000_000_000L) long a,
-    //                                @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
-    //     assertThat(Money.of(a, USD).plus(Money.of(b, USD)).amountMinor()).isEqualTo(a + b);
-    // }
+    @Property
+    void plusAddsMinorUnitsExactly(@ForAll @LongRange(min = 1, max = 1_000_000_000L) long a,
+                                   @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
+        assertThat(Money.of(a, USD).plus(Money.of(b, USD)).amountMinor()).isEqualTo(a + b);
+    }
 
-    // @Test
-    // void plusRejectsCurrencyMismatch() {
-    //     assertThatThrownBy(() -> Money.of(100, USD).plus(Money.of(100, EUR)))
-    //             .isInstanceOf(CurrencyMismatchException.class); // or your chosen exception type
-    // }
+    @Test
+    void plusRejectsCurrencyMismatch() {
+        assertThatThrownBy(() -> Money.of(100, USD).plus(Money.of(100, EUR)))
+                .isInstanceOf(IllegalArgumentException .class);
+    }
 
-    // @Test
-    // void plusThrowsOnOverflowInsteadOfWrapping() {
-    //     Money max = Money.of(Long.MAX_VALUE, USD);
-    //     assertThatThrownBy(() -> max.plus(Money.of(1, USD)))
-    //             .isInstanceOf(ArithmeticException.class);
-    // }
+    @Test
+    void plusThrowsOnOverflowInsteadOfWrapping() {
+        Money max = Money.of(Long.MAX_VALUE, USD);
+        assertThatThrownBy(() -> max.plus(Money.of(1, USD)))
+                .isInstanceOf(ArithmeticException.class);
+    }
 
     // // ---------- Decimal-string boundary parsing ----------
 
@@ -137,7 +137,6 @@ class MoneyTest {
 
     // @Property
     // void parseAndFormatRoundTrip(@ForAll @LongRange(min = 1, max = 10_000_000_000L) long minor) {
-    //     // Only include this if you add a toDecimalString(); delete otherwise.
     //     Money m = Money.of(minor, USD);
     //     assertThat(Money.parse(m.toDecimalString(), USD)).isEqualTo(m);
     // }
