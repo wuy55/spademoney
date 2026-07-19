@@ -62,14 +62,14 @@ class MoneyTest {
         }
     }
 
-    // // ---------- Value semantics ----------
+    // ---------- Value semantics ----------
 
-    // @Property
-    // void equalityIsByAmountAndCurrency(@ForAll @LongRange(min = 1) long amount) {
-    //     assertThat(Money.of(amount, USD)).isEqualTo(Money.of(amount, USD));
-    //     assertThat(Money.of(amount, USD)).isNotEqualTo(Money.of(amount, EUR));
-    //     assertThat(Money.of(amount, USD).hashCode()).isEqualTo(Money.of(amount, USD).hashCode());
-    // }
+    @Property
+    void equalityIsByAmountAndCurrency(@ForAll @LongRange(min = 1) long amount) {
+        assertThat(Money.of(amount, USD)).isEqualTo(Money.of(amount, USD));
+        assertThat(Money.of(amount, USD)).isNotEqualTo(Money.of(amount, EUR));
+        assertThat(Money.of(amount, USD).hashCode()).isEqualTo(Money.of(amount, USD).hashCode());
+    }
 
     // // ---------- Arithmetic ----------
 
