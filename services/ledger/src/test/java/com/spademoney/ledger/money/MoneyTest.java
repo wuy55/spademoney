@@ -33,34 +33,34 @@ class MoneyTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // @Property
-    // void rejectsAllNegativeAmounts(@ForAll @LongRange(min = Long.MIN_VALUE, max = -1) long negative) {
-    //     assertThatThrownBy(() -> Money.of(negative, USD))
-    //             .isInstanceOf(IllegalArgumentException.class);
-    // }
+    @Property
+    void rejectsAllNegativeAmounts(@ForAll @LongRange(min = Long.MIN_VALUE, max = -1) long negative) {
+        assertThatThrownBy(() -> Money.of(negative, USD))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 
-    // @Property
-    // void acceptsAllPositiveAmounts(@ForAll @LongRange(min = 1, max = Long.MAX_VALUE) long positive) {
-    //     Money m = Money.of(positive, USD);
-    //     assertThat(m.amountMinor()).isEqualTo(positive);
-    //     assertThat(m.currency()).isEqualTo(USD);
-    // }
+    @Property
+    void acceptsAllPositiveAmounts(@ForAll @LongRange(min = 1, max = Long.MAX_VALUE) long positive) {
+        Money m = Money.of(positive, USD);
+        assertThat(m.amountMinor()).isEqualTo(positive);
+        assertThat(m.currency()).isEqualTo(USD);
+    }
 
-    // @Test
-    // void noFloatOrDoubleFactoryExists() {
-    //     // Compile-time guarantee, verified reflectively as a regression tripwire:
-    //     // no public constructor or static factory on Money accepts float/double.
-    //     for (var m : Money.class.getMethods()) {
-    //         for (var p : m.getParameterTypes()) {
-    //             assertThat(p).isNotIn(float.class, double.class, Float.class, Double.class);
-    //         }
-    //     }
-    //     for (var c : Money.class.getConstructors()) {
-    //         for (var p : c.getParameterTypes()) {
-    //             assertThat(p).isNotIn(float.class, double.class, Float.class, Double.class);
-    //         }
-    //     }
-    // }
+    @Test
+    void noFloatOrDoubleFactoryExists() {
+        // Compile-time guarantee, verified reflectively as a regression tripwire:
+        // no public constructor or static factory on Money accepts float/double.
+        for (var m : Money.class.getMethods()) {
+            for (var p : m.getParameterTypes()) {
+                assertThat(p).isNotIn(float.class, double.class, Float.class, Double.class);
+            }
+        }
+        for (var c : Money.class.getConstructors()) {
+            for (var p : c.getParameterTypes()) {
+                assertThat(p).isNotIn(float.class, double.class, Float.class, Double.class);
+            }
+        }
+    }
 
     // // ---------- Value semantics ----------
 
