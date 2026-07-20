@@ -12,10 +12,11 @@ import static org.assertj.core.api.Assertions.*;
  * Contract tests for the Money value object (Milestone 1).
  *
  * Assumed API — ratify or change before implementing:
- *   Money.of(long amountMinor, Currency currency)   // throws on <= 0
- *   Money.parse(String decimal, Currency currency)  // BigDecimal-based, rejects excess precision
- *   money.plus(Money other)                         // throws on currency mismatch or long overflow
- *   money.amountMinor(), money.currency()
+ * Money.of(long amountMinor, Currency currency) // throws on <= 0
+ * Money.parse(String decimal, Currency currency) // BigDecimal-based, rejects
+ * excess precision
+ * money.plus(Money other) // throws on currency mismatch or long overflow
+ * money.amountMinor(), money.currency()
  * No constructor/factory accepting float or double may exist.
  */
 class MoneyTest {
@@ -75,21 +76,21 @@ class MoneyTest {
 
     @Property
     void plusIsCommutative(@ForAll @LongRange(min = 1, max = 1_000_000_000L) long a,
-                           @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
+            @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
         assertThat(Money.of(a, USD).plus(Money.of(b, USD)))
                 .isEqualTo(Money.of(b, USD).plus(Money.of(a, USD)));
     }
 
     @Property
     void plusAddsMinorUnitsExactly(@ForAll @LongRange(min = 1, max = 1_000_000_000L) long a,
-                                   @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
+            @ForAll @LongRange(min = 1, max = 1_000_000_000L) long b) {
         assertThat(Money.of(a, USD).plus(Money.of(b, USD)).amountMinor()).isEqualTo(a + b);
     }
 
     @Test
     void plusRejectsCurrencyMismatch() {
         assertThatThrownBy(() -> Money.of(100, USD).plus(Money.of(100, EUR)))
-                .isInstanceOf(IllegalArgumentException .class);
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

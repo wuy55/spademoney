@@ -20,7 +20,7 @@ public record Money(long amountMinor, Currency currency) {
     public Money plus(Money other) {
         if (!this.currency.equals(other.currency)){
             throw new IllegalArgumentException(
-                "Cannot add difference currencies: " + this.currency + " + " + other.currency
+                "Cannot add different currencies: " + this.currency + " + " + other.currency
             );
         }
         return new Money(Math.addExact(this.amountMinor, other.amountMinor), this.currency);
