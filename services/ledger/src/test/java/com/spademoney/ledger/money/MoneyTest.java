@@ -99,45 +99,45 @@ class MoneyTest {
                 .isInstanceOf(ArithmeticException.class);
     }
 
-    // // ---------- Decimal-string boundary parsing ----------
+    // ---------- Decimal-string boundary parsing ----------
 
-    // @Test
-    // void parsesTwoFractionDigitCurrency() {
-    //     assertThat(Money.parse("10.50", USD)).isEqualTo(Money.of(1050, USD));
-    //     assertThat(Money.parse("10.5", USD)).isEqualTo(Money.of(1050, USD));
-    //     assertThat(Money.parse("10", USD)).isEqualTo(Money.of(1000, USD));
-    // }
+    @Test
+    void parsesTwoFractionDigitCurrency() {
+        assertThat(Money.parse("10.50", USD)).isEqualTo(Money.of(1050, USD));
+        assertThat(Money.parse("10.5", USD)).isEqualTo(Money.of(1050, USD));
+        assertThat(Money.parse("10", USD)).isEqualTo(Money.of(1000, USD));
+    }
 
-    // @Test
-    // void parsesZeroFractionDigitCurrency() {
-    //     assertThat(Money.parse("1500", JPY)).isEqualTo(Money.of(1500, JPY));
-    // }
+    @Test
+    void parsesZeroFractionDigitCurrency() {
+        assertThat(Money.parse("1500", JPY)).isEqualTo(Money.of(1500, JPY));
+    }
 
-    // @Test
-    // void parsesThreeFractionDigitCurrency() {
-    //     assertThat(Money.parse("1.234", BHD)).isEqualTo(Money.of(1234, BHD));
-    // }
+    @Test
+    void parsesThreeFractionDigitCurrency() {
+        assertThat(Money.parse("1.234", BHD)).isEqualTo(Money.of(1234, BHD));
+    }
 
-    // @Test
-    // void rejectsExcessPrecisionRatherThanRounding() {
-    //     assertThatThrownBy(() -> Money.parse("10.005", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse("1500.5", JPY)).isInstanceOf(IllegalArgumentException.class);
-    // }
+    @Test
+    void rejectsExcessPrecisionRatherThanRounding() {
+        assertThatThrownBy(() -> Money.parse("10.005", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse("1500.5", JPY)).isInstanceOf(IllegalArgumentException.class);
+    }
 
-    // @Test
-    // void parseRejectsZeroNegativeAndGarbage() {
-    //     assertThatThrownBy(() -> Money.parse("0", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse("0.00", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse("-5.00", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse("ten dollars", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse("1e3", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse("", USD)).isInstanceOf(IllegalArgumentException.class);
-    //     assertThatThrownBy(() -> Money.parse(null, USD)).isInstanceOf(IllegalArgumentException.class);
-    // }
+    @Test
+    void parseRejectsZeroNegativeAndGarbage() {
+        assertThatThrownBy(() -> Money.parse("0", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse("0.00", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse("-5.00", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse("ten dollars", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse("1e3", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse("", USD)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Money.parse(null, USD)).isInstanceOf(IllegalArgumentException.class);
+    }
 
-    // @Property
-    // void parseAndFormatRoundTrip(@ForAll @LongRange(min = 1, max = 10_000_000_000L) long minor) {
-    //     Money m = Money.of(minor, USD);
-    //     assertThat(Money.parse(m.toDecimalString(), USD)).isEqualTo(m);
-    // }
+    @Property
+    void parseAndFormatRoundTrip(@ForAll @LongRange(min = 1, max = 10_000_000_000L) long minor) {
+        Money m = Money.of(minor, USD);
+        assertThat(Money.parse(m.toDecimalString(), USD)).isEqualTo(m);
+    }
 }
