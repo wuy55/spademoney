@@ -75,17 +75,16 @@ public class LedgerTransactionService {
         // ========== STEP 5: Post two entries (debit and credit) ==========
         String currencyCode = amount.currency().getCurrencyCode();
 
-        // Entry 1: DEBIT from sender
-        jdbcClient
-                .sql("INSERT INTO entries(transaction_id, account_id, direction, amount_minor, currency) VALUES (?, ?, 'DEBIT', ?, ?)")
-                .params(transactionId, fromAccountId, amount.amountMinor(), currencyCode)
-                .update();
-
-        // Entry 2: CREDIT to receiver
-        jdbcClient
-                .sql("INSERT INTO entries(transaction_id, account_id, direction, amount_minor, currency) VALUES (?, ?, 'CREDIT', ?, ?)")
-                .params(transactionId, toAccountId, amount.amountMinor(), currencyCode)
-                .update();
+        // Both entries in ONE statement — trigger sees balanced transaction
+        jdbcClient.sql("""
+        INSERT INTO entries(transaction_id, account_id, direction, amount_minor, currency)
+        VALUES
+            (?, ?, 'DEBIT', ?, ?),
+            (?, ?, 'CREDIT', ?, ?)
+        """)
+        .params(transactionId, fromAccountId, amount.amountMinor(), currencyCode,
+                transactionId, toAccountId, amount.amountMinor(), currencyCode)
+        .update();
 
         // ========== STEP 6: Return the transaction ID ==========
         return transactionId;
