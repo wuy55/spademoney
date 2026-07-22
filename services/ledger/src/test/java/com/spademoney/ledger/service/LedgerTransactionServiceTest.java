@@ -130,46 +130,75 @@ class LedgerTransactionServiceTest {
         assertThat(balance2).isGreaterThanOrEqualTo(0L);
     }
 
-    // ========== TEST 4: Concurrency test — N threads on one account, no overdraft
+    // ========== TEST 4: Concurrency — N threads drain one account; ordered
+    // pessimistic locking must serialize them so NO overdraft slips through.
+    //
+    // FORCED-NEGATIVE SIZING: source holds 100_000; 10 threads each try to move
+    // 15_000 → 150_000 demanded > 100_000 available. If the FOR UPDATE lock did
+    // nothing, threads would read the same stale balance, all pass the overdraft
+    // check, and drive source to 100_000 − 150_000 = −50_000.
+    //
+    // INDEPENDENT ORACLE: with correct single-source serialization each success
+    // removes exactly 15_000, so exactly floor(100_000 / 15_000) = 6 succeed,
+    // regardless of thread ordering (after 6, only 10_000 < 15_000 remains). The
+    // expected value is derived from arithmetic, NOT read back from the code
+    // under test — remove the lock and this test fails.
     // ==========
     @Test
     void testConcurrencyNoOverdraft() throws InterruptedException {
+        final long INITIAL = 100_000L;
+        final long AMOUNT = 15_000L;
+        final int THREADS = 10;
+        final int EXPECTED_SUCCESSES = (int) (INITIAL / AMOUNT); // 6, computed independently
+
         Long source = createAccount("USER_WALLET", "USD");
         Long dest = createAccount("USER_WALLET", "USD");
-        fundAccount(source, 100_000L);
+        fundAccount(source, INITIAL);
 
-        int numThreads = 10;
-        int amountPerThread = 15000;
-        CountDownLatch latch = new CountDownLatch(numThreads);
+        CountDownLatch startGate = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(THREADS);
         AtomicInteger successCount = new AtomicInteger(0);
+        Queue<Throwable> unexpected = new ConcurrentLinkedQueue<>();
 
-        for (int i = 0; i < numThreads; i++) {
+        for (int i = 0; i < THREADS; i++) {
             new Thread(() -> {
                 try {
-                    Money amount = Money.of(amountPerThread, Currency.getInstance("USD"));
-                    ledgerService.transfer(source, dest, amount);
+                    startGate.await(); // release all threads at once → tighten the race window
+                    ledgerService.transfer(source, dest, Money.of(AMOUNT, Currency.getInstance("USD")));
                     successCount.incrementAndGet();
-                } catch (IllegalArgumentException e) {
-                    // Expected: some threads overdraft
+                } catch (IllegalArgumentException overdraft) {
+                    // legal outcome once the account is drained
+                } catch (Throwable t) {
+                    unexpected.add(t); // anything else is a real failure, surfaced below
                 } finally {
-                    latch.countDown();
+                    done.countDown();
                 }
             }).start();
         }
 
-        latch.await();
+        startGate.countDown();
+        boolean finished = done.await(30, TimeUnit.SECONDS);
+        assertThat(finished).as("threads hung — possible deadlock").isTrue();
+        assertThat(unexpected).as("transfers threw unexpected (non-overdraft) errors").isEmpty();
 
-        // Some transfers succeed, some fail due to overdraft
-        assertThat(successCount.get()).isGreaterThan(0);
-        assertThat(successCount.get()).isLessThanOrEqualTo(numThreads);
+        long sourceBalance = getBalance(source);
+        long destBalance = getBalance(dest);
 
-        // Source balance never went negative
-        Long sourceBalance = getBalance(source);
-
-        Long destBalance = getBalance(dest);
-        assertThat(destBalance).isGreaterThan(0L);
-        assertThat(sourceBalance + destBalance).isEqualTo(100_000L);
-        assertThat(sourceBalance).isGreaterThanOrEqualTo(0L);
+        // Independent-oracle assertions — all deterministic:
+        assertThat(successCount.get())
+                .as("exactly floor(%d/%d)=%d transfers may succeed", INITIAL, AMOUNT, EXPECTED_SUCCESSES)
+                .isEqualTo(EXPECTED_SUCCESSES);
+        assertThat(sourceBalance)
+                .as("source = initial minus exactly the successful debits")
+                .isEqualTo(INITIAL - (long) EXPECTED_SUCCESSES * AMOUNT); // 10_000
+        assertThat(destBalance)
+                .isEqualTo((long) EXPECTED_SUCCESSES * AMOUNT); // 90_000
+        assertThat(sourceBalance + destBalance)
+                .as("money is conserved")
+                .isEqualTo(INITIAL);
+        assertThat(sourceBalance)
+                .as("source must never go negative")
+                .isGreaterThanOrEqualTo(0L);
     }
 
     // ========== TEST 5: Concurrency test — bidirectional transfers, no deadlock
