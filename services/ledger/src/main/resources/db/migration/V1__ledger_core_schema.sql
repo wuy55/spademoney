@@ -1,5 +1,5 @@
 -- V1__ledger_core_schema.sql
--- Milestone 1: ledger core. Accounts, transactions, immutable entries, idempotency.
+-- Ledger core: accounts, transactions, immutable entries, idempotency.
 -- Invariants enforced HERE (not just in app code):
 --   (1) entries are append-only               -> forbid_mutation trigger
 --   (2) every transaction nets to zero per ccy -> deferred constraint trigger
@@ -17,7 +17,7 @@ CREATE TABLE accounts (
 
 -- ---------------------------------------------------------------------------
 -- transactions
--- A transfer is atomic and immediately POSTED in M1 (holds arrive in M2).
+-- A transfer is atomic and immediately POSTED (holds are not yet modeled).
 -- Idempotency lives in its own table (see idempotency_keys) rather than here,
 -- so the API concern (fingerprint, stored HTTP response, per-endpoint scope)
 -- does not leak into the ledger domain table.
@@ -45,7 +45,7 @@ CREATE INDEX idx_entries_account ON entries (account_id);
 CREATE INDEX idx_entries_txn     ON entries (transaction_id);
 
 -- Invariant (1): entries are append-only. Corrections are reversing entries,
--- never UPDATE/DELETE (brief §3.2).
+-- never UPDATE/DELETE.
 CREATE OR REPLACE FUNCTION forbid_mutation() RETURNS trigger AS $$
 BEGIN
     RAISE EXCEPTION 'entries are append-only: % is not permitted', TG_OP
@@ -61,7 +61,7 @@ CREATE TRIGGER entries_immutable
 -- DEFERRABLE INITIALLY DEFERRED so it fires once at commit, after all of a
 -- transaction's entries are inserted -- not mid-insert when only one side
 -- exists. Positive-only amounts mean a net of zero forces >=2 entries.
--- Written per-currency now so multi-currency FX (Backlog #1) needs no rework.
+-- Written per-currency so multi-currency support needs no rework here.
 CREATE OR REPLACE FUNCTION assert_transaction_balanced() RETURNS trigger AS $$
 DECLARE
     unbalanced INT;
@@ -90,18 +90,19 @@ CREATE CONSTRAINT TRIGGER entries_balanced
     FOR EACH ROW EXECUTE FUNCTION assert_transaction_balanced();
 
 -- ---------------------------------------------------------------------------
--- idempotency_keys  (brief §5.4; ADR-005: lives in Postgres, commits atomically
--- with the money movement it protects). Scoped per endpoint.
+-- idempotency_keys: lives in Postgres and commits atomically with the money
+-- movement it protects. Scoped per endpoint.
 -- ---------------------------------------------------------------------------
 CREATE TABLE idempotency_keys (
     endpoint             TEXT        NOT NULL,
     idempotency_key      TEXT        NOT NULL,
     request_fingerprint  TEXT        NOT NULL,
-    status               TEXT        NOT NULL CHECK (status IN ('IN_PROGRESS','COMPLETED')),
+    status               TEXT        NOT NULL,
     response_status      INT,
     response_body        TEXT,
     transaction_id       BIGINT      REFERENCES transactions(id),
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at         TIMESTAMPTZ,
-    PRIMARY KEY (endpoint, idempotency_key)
+    PRIMARY KEY (endpoint, idempotency_key),
+    CONSTRAINT ck_idempotency_status CHECK (status IN ('IN_PROGRESS', 'COMPLETED'))
 );
