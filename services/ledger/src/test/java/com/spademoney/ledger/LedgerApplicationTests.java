@@ -1,24 +1,22 @@
 package com.spademoney.ledger;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.testcontainers.postgresql.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-@Testcontainers
+@Import(TestcontainersConfiguration.class)
 class LedgerApplicationTests {
 
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16");
+    @Autowired
+    JdbcClient jdbcClient;
 
     @Test
-    void contextLoads() {
-        assertTrue(postgres.isRunning());
+    void contextLoadsAgainstRealPostgres() {
+        assertThat(jdbcClient.sql("SELECT 1").query(Integer.class).single()).isEqualTo(1);
     }
 }

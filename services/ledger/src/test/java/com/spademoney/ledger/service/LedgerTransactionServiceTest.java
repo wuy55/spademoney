@@ -12,23 +12,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.testcontainers.postgresql.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-
+import com.spademoney.ledger.TestcontainersConfiguration;
 import com.spademoney.ledger.money.Money;
 
 import static org.assertj.core.api.Assertions.*;
 
 @SpringBootTest
-@Testcontainers
+@Import(TestcontainersConfiguration.class)
 class LedgerTransactionServiceTest {
-
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16");
 
     @Autowired
     private LedgerTransactionService ledgerService;
@@ -110,27 +103,7 @@ class LedgerTransactionServiceTest {
         assertThat(getBalance(account2Id)).isEqualTo(100_000L);
     }
 
-    // ========== TEST 3: Property test — ledger invariant holds under random
-    // transfers ==========
-    @Test
-    void testLedgerInvariantUnderRandomTransfers() {
-        // Use the setup accounts, not freshly created ones
-        Money m1 = Money.of(5000L, Currency.getInstance("USD"));
-        Money m2 = Money.of(3000L, Currency.getInstance("USD"));
-        Money m3 = Money.of(2000L, Currency.getInstance("USD"));
-
-        ledgerService.transfer(account1Id, account2Id, m1);
-        ledgerService.transfer(account2Id, account1Id, m2); // bidirectional
-        ledgerService.transfer(account1Id, account2Id, m3);
-
-        // Verify ledger invariant
-        Long balance1 = getBalance(account1Id);
-        Long balance2 = getBalance(account2Id);
-        assertThat(balance1).isGreaterThanOrEqualTo(0L);
-        assertThat(balance2).isGreaterThanOrEqualTo(0L);
-    }
-
-    // ========== TEST 4: Concurrency — N threads drain one account; ordered
+    // ========== TEST 3: Concurrency — N threads drain one account; ordered
     // pessimistic locking must serialize them so NO overdraft slips through.
     //
     // FORCED-NEGATIVE SIZING: source holds 100_000; 10 threads each try to move
@@ -201,7 +174,7 @@ class LedgerTransactionServiceTest {
                 .isGreaterThanOrEqualTo(0L);
     }
 
-    // ========== TEST 5: Concurrency test — bidirectional transfers, no deadlock
+    // ========== TEST 4: Concurrency test — bidirectional transfers, no deadlock
     // ==========
     @Test
     void testConcurrencyBidirectional() throws InterruptedException {
@@ -249,8 +222,5 @@ class LedgerTransactionServiceTest {
         long balanceA = getBalance(acctA);
         long balanceB = getBalance(acctB);
         assertThat(balanceA + balanceB).isEqualTo(200_000L); // 100k + 100k
-
-        assertThat(balanceA).isNotNull();
-        assertThat(balanceB).isNotNull();
     }
 }

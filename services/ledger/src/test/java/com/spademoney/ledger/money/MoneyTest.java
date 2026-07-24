@@ -1,4 +1,4 @@
-package com.spademoney.ledger.money; // ← adjust to your actual package
+package com.spademoney.ledger.money;
 
 import net.jqwik.api.*;
 import net.jqwik.api.constraints.LongRange;
@@ -9,15 +9,14 @@ import java.util.Currency;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Contract tests for the Money value object (Milestone 1).
+ * Tests for the Money value object.
  *
- * Assumed API — ratify or change before implementing:
- * Money.of(long amountMinor, Currency currency) // throws on <= 0
- * Money.parse(String decimal, Currency currency) // BigDecimal-based, rejects
- * excess precision
- * money.plus(Money other) // throws on currency mismatch or long overflow
+ * API under test:
+ * Money.of(long amountMinor, Currency currency)   — throws on <= 0
+ * Money.parse(String decimal, Currency currency)  — BigDecimal-based, rejects excess precision
+ * money.plus(Money other)                         — throws on currency mismatch or long overflow
  * money.amountMinor(), money.currency()
- * No constructor/factory accepting float or double may exist.
+ * No constructor or factory accepting float or double exists.
  */
 class MoneyTest {
 
