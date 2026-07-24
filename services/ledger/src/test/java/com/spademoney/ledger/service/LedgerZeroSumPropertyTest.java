@@ -8,12 +8,9 @@ import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.testcontainers.postgresql.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-
+import com.spademoney.ledger.TestcontainersConfiguration;
 import com.spademoney.ledger.money.Money;
 
 import net.jqwik.api.Arbitraries;
@@ -28,31 +25,27 @@ import static org.assertj.core.api.Assertions.*;
  * transfer attempts, the global ledger must stay internally consistent.
  *
  * Two invariants are asserted after EVERY op:
- *   (1) Global zero-sum — Σ over the WHOLE entries table of
- *       (CREDIT:+amount, DEBIT:-amount) == 0. Holds because every posting
- *       (funding AND transfer) is balanced by construction; the DB deferred
- *       trigger enforces it per transaction, this proves it globally.
- *   (2) No USER_WALLET ever goes negative — the ordered FOR UPDATE lock +
- *       atomic overdraft check must hold under random interleavings.
+ * (1) Global zero-sum — Σ over the WHOLE entries table of
+ * (CREDIT:+amount, DEBIT:-amount) == 0. Holds because every posting
+ * (funding AND transfer) is balanced by construction; the DB deferred
+ * trigger enforces it per transaction, this proves it globally.
+ * (2) No USER_WALLET ever goes negative — the ordered FOR UPDATE lock +
+ * atomic overdraft check must hold under random interleavings.
  *
  * Note the CASH account is deliberately NOT asserted non-negative: it is the
- * system account money is issued *from* (deposit debits CASH, credits the
- * wallet — brief §5.3, wallets-as-liability), so it runs negative by the total
- * funded. The global zero-sum still holds.
+ * system account money is issued *from* (a deposit debits CASH, credits the
+ * wallet — wallets are a liability), so it runs negative by the total funded.
+ * The global zero-sum still holds.
  *
- * DESIGN: this runs as @SpringBootTest/@Test rather than jqwik @Property so the
+ * This runs as @SpringBootTest/@Test rather than jqwik @Property so the
  * service keeps its real, proxy-driven @Transactional boundary (a hand-built
  * bean would make @Transactional a no-op and quietly break atomicity). jqwik
  * still drives generation; the fixed seed makes any failure reproducible. The
  * tradeoff vs a native @Property is loss of automatic shrinking.
  */
 @SpringBootTest
-@Testcontainers
+@Import(TestcontainersConfiguration.class)
 class LedgerZeroSumPropertyTest {
-
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16");
 
     @Autowired
     private LedgerTransactionService ledgerService;
@@ -61,11 +54,11 @@ class LedgerZeroSumPropertyTest {
     private JdbcClient jdbcClient;
 
     private static final Currency USD = Currency.getInstance("USD");
-    private static final int  POOL_SIZE        = 4;
-    private static final long INITIAL_FUNDING  = 100_000L;
-    private static final int  NUM_SEQUENCES    = 20;
-    private static final int  SEQUENCE_LENGTH  = 25;
-    private static final long MAX_TRANSFER     = 200_000L; // > funding → forces overdraft attempts
+    private static final int POOL_SIZE = 4;
+    private static final long INITIAL_FUNDING = 100_000L;
+    private static final int NUM_SEQUENCES = 20;
+    private static final int SEQUENCE_LENGTH = 25;
+    private static final long MAX_TRANSFER = 200_000L; // > funding → forces overdraft attempts
 
     private record TransferOp(int fromIdx, int toIdx, long amountMinor) {
     }
@@ -74,9 +67,9 @@ class LedgerZeroSumPropertyTest {
     void globalLedgerNetsToZeroUnderRandomTransferSequences() {
         // fromIdx != toIdx so every op is a genuine two-account transfer.
         Arbitrary<TransferOp> opArb = Combinators.combine(
-                        Arbitraries.integers().between(0, POOL_SIZE - 1),
-                        Arbitraries.integers().between(0, POOL_SIZE - 1),
-                        Arbitraries.longs().between(1L, MAX_TRANSFER))
+                Arbitraries.integers().between(0, POOL_SIZE - 1),
+                Arbitraries.integers().between(0, POOL_SIZE - 1),
+                Arbitraries.longs().between(1L, MAX_TRANSFER))
                 .as((from, to, amount) -> new TransferOp(from, to, amount))
                 .filter(op -> op.fromIdx() != op.toIdx());
 
@@ -90,7 +83,7 @@ class LedgerZeroSumPropertyTest {
             for (int i = 0; i < SEQUENCE_LENGTH; i++) {
                 TransferOp op = gen.next(random).value();
                 Long from = wallets.get(op.fromIdx());
-                Long to   = wallets.get(op.toIdx());
+                Long to = wallets.get(op.toIdx());
 
                 try {
                     ledgerService.transfer(from, to, Money.of(op.amountMinor(), USD));
