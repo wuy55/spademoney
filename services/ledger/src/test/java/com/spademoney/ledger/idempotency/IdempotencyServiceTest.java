@@ -49,7 +49,7 @@ class IdempotencyServiceTest {
         // runs test classes SEQUENTIALLY. Do not enable
         // junit.jupiter.execution.parallel without revisiting this.
         jdbcClient.sql("""
-                TRUNCATE entries, transactions, idempotency_keys, accounts
+                TRUNCATE holds, entries, transactions, idempotency_keys, accounts
                 RESTART IDENTITY CASCADE
                 """).update();
 
@@ -199,7 +199,7 @@ class IdempotencyServiceTest {
 
     private void fundAccount(Long cashId, Long walletId, long amountMinor) {
         Long txnId = jdbcClient
-                .sql("INSERT INTO transactions DEFAULT VALUES RETURNING id")
+                .sql("INSERT INTO transactions(type) VALUES ('TRANSFER') RETURNING id")
                 .query(Long.class)
                 .single();
         jdbcClient.sql("""

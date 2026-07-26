@@ -169,7 +169,7 @@ class TransferIdempotencyContractTest {
 
     private void fundAccount(Long cashId, Long walletId, long amountMinor) {
         Long txnId = jdbcClient
-                .sql("INSERT INTO transactions DEFAULT VALUES RETURNING id")
+                .sql("INSERT INTO transactions(type) VALUES ('TRANSFER') RETURNING id")
                 .query(Long.class)
                 .single();
         jdbcClient.sql("""

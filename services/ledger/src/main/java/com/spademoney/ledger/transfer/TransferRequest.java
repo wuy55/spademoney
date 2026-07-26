@@ -1,5 +1,7 @@
 package com.spademoney.ledger.transfer;
 
+import com.spademoney.ledger.idempotency.IdempotentRequest;
+
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -14,5 +16,15 @@ public record TransferRequest(
         @NotNull Long fromAccountId,
         @NotNull Long toAccountId,
         @Positive long amountMinor,
-        @NotBlank String currency) {
+        @NotBlank String currency) implements IdempotentRequest {
+
+    /**
+     * Changing this string invalidates every idempotency row ever written for
+     * this endpoint: stored fingerprints would stop matching, turning live
+     * replays into 422 key-reuse errors. Do not reorder or reformat.
+     */
+    @Override
+    public String canonicalForm() {
+        return "%d|%d|%d|%s".formatted(fromAccountId, toAccountId, amountMinor, currency);
+    }
 }

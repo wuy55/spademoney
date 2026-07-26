@@ -1,0 +1,14 @@
+# Shadows src/main/resources/application.yml on the test classpath.
+#
+# The datasource is not restated on purpose: Testcontainers supplies it through
+# @ServiceConnection, and Flyway is enabled by default.
+#
+# The sweeper's TRIGGER is off. Expiry correctness comes from the
+# `expires_at > now()` predicate, not from this job, so the tests that prove it
+# need a lapsed hold to sit there still marked ACTIVE. A background thread
+# relabelling it mid-assertion would make those tests flaky. The sweeper bean is
+# still present; HoldExpirySweeperTest drives it explicitly.
+spademoney:
+  holds:
+    sweeper:
+      enabled: false

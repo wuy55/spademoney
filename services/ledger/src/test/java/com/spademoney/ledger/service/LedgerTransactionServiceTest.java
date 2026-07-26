@@ -55,7 +55,7 @@ class LedgerTransactionServiceTest {
 
     private void fundAccount(Long accountId, Long amountMinor) {
         Long txnId = jdbcClient
-                .sql("INSERT INTO transactions DEFAULT VALUES RETURNING id")
+                .sql("INSERT INTO transactions(type) VALUES ('TRANSFER') RETURNING id")
                 .query(Long.class)
                 .single();
 

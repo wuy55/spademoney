@@ -5,3 +5,12 @@ spring:
     password: spademoney
   flyway:
     enabled: true
+
+spademoney:
+  holds:
+    sweeper:
+      # Housekeeping only -- correctness comes from the expires_at predicate,
+      # not from this job. Safe to disable or pause.
+      enabled: true
+      interval: PT1M
+      batch-size: 500
