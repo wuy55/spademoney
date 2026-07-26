@@ -174,6 +174,23 @@ class RefundTest {
         assertThat(balances.posted(payee)).isNotNegative();
     }
 
+    // Both rules reject this refund at once: it exceeds the remaining cap AND
+    // the merchant cannot cover it. The cap is reported, because no amount of
+    // waiting makes it succeed, while an empty balance can be topped up. Pins
+    // the order of the two checks, which is otherwise only implied by the order
+    // of two statements.
+    @Test
+    void whenBothTheCapAndTheBalanceRejectItTheCapIsReported() {
+        Long original = ledger.transfer(payer, payee, Money.of(30_000L, USD));
+        refunds.refund(new RefundRequest(original, 25_000L));   // 5_000 still refundable
+        ledger.transfer(payee, payer, Money.of(5_000L, USD));   // merchant spends the rest
+
+        assertThat(balances.available(payee)).isZero();
+
+        assertThatThrownBy(() -> refunds.refund(new RefundRequest(original, 10_000L)))
+                .isInstanceOf(RefundExceedsOriginalException.class);
+    }
+
     // A capture is refundable like any other posting -- that is the point of
     // recording its type rather than leaving it indistinguishable from a transfer.
     @Test
@@ -200,8 +217,11 @@ class RefundTest {
         final int EXPECTED = (int) (ORIGINAL / AMOUNT);
 
         Long original = ledger.transfer(payer, payee, Money.of(ORIGINAL, USD));
-        // Fund the merchant generously so the CAP, not the balance, is the
-        // binding constraint -- otherwise this test would prove the wrong thing.
+        // Fund the merchant far beyond the original so the CAP is the only
+        // binding constraint. Left alone, the payee holds exactly ORIGINAL, and
+        // the balance would independently allow the same floor(30000/12000) = 2
+        // refunds -- so deleting the cap check entirely would still produce 2
+        // and this test would pass while proving nothing.
         fund(payee, 500_000L);
 
         CountDownLatch startGate = new CountDownLatch(1);
