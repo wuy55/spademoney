@@ -1,0 +1,656 @@
+# OpenAPI 3.1.2 - latest patch of the 3.1 line, which is JSON Schema 2020-12
+# aligned and universally supported by Swagger UI, Redoc and the online editors.
+# 3.2.0 is released, but nothing here uses a 3.2-only feature, so declaring it
+# would buy no capability while risking rejection by the very tools a reviewer
+# will paste this into. Moving up is a one-line change if that stops being true.
+openapi: 3.1.2
+
+# Hand-written, not generated.
+#
+# springdoc-openapi's newest release (2.8.6) targets Spring Boot 3 / Spring
+# Framework 6 and is built against Jackson 2. This service runs Boot 4.1 on
+# Framework 7 with Jackson 3 (tools.jackson), so adding springdoc would drag a
+# second Jackson onto the classpath purely to generate documentation. Revisit
+# when springdoc ships Boot 4 support.
+#
+# Writing it by hand is the same argument as ADR-008 (explicit SQL over an ORM):
+# the contract is the artifact under review, so it should be readable and
+# deliberate rather than a by-product of annotations.
+
+info:
+  title: SpadeMoney Ledger API
+  version: "2.0.0"
+  description: |
+    A double-entry payments ledger with card-rail semantics:
+    authorization holds, capture (full and partial), void, and refunds
+    as reversing entries.
+
+    **Money** is always integer minor units (`long`) plus an ISO-4217 code.
+    There are no floats anywhere in this API.
+
+    **Balances are derived, never stored**:
+
+        posted    = sum of signed entries            (money that actually moved)
+        held      = sum of active, unexpired holds   (money spoken for)
+        available = posted - held                    (what can be spent now)
+
+    Every debit path checks `available`, which is what keeps
+    `posted >= sum(active holds)` true for every account at all times.
+
+    **Every money-mutating endpoint requires an `Idempotency-Key` header** and
+    implements the same four-case contract (see the header's description).
+
+servers:
+  - url: http://localhost:8080
+    description: Local docker compose
+
+tags:
+  - name: Transfers
+    description: Direct movement of money between two accounts.
+  - name: Holds
+    description: Authorization lifecycle - reserve, then capture or void.
+  - name: Refunds
+    description: Give money back as reversing entries.
+  - name: Accounts
+    description: Read-side balance queries.
+
+paths:
+  /transfers:
+    post:
+      tags: [Transfers]
+      summary: Move money between two accounts
+      description: |
+        Posts a balanced double entry: the payer is debited and the payee
+        credited in one transaction. Rejected if the payer's **available**
+        balance (not merely posted) is below the amount.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '201':
+          description: Transfer posted. Replays of the same key return this same body.
+          headers:
+            Location:
+              schema: { type: string }
+              example: /transfers/42
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyInProgress' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /transfers/{id}:
+    get:
+      tags: [Transfers]
+      summary: Read a transaction and both sides of its posting
+      description: |
+        Exposes the entries, not just the id - double-entry is the point of the
+        system, so the API shows both sides. Also serves refunds and captures,
+        which are transactions like any other.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: The transaction and its entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferView'
+              # Stated explicitly so both sides of the posting appear. Rendered
+              # from the schema alone, every entry takes the first enum value and
+              # the example shows two debits -- a double-entry example that does
+              # not sum to zero.
+              example:
+                transactionId: 91
+                type: REFUND
+                reversesTransactionId: 42
+                status: POSTED
+                createdAt: "2026-07-26T12:00:00Z"
+                entries:
+                  - accountId: 3
+                    direction: DEBIT
+                    amountMinor: 13100
+                    currency: USD
+                  - accountId: 2
+                    direction: CREDIT
+                    amountMinor: 13100
+                    currency: USD
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /accounts/{id}/balance:
+    get:
+      tags: [Accounts]
+      summary: Posted, held and available balance
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: All three figures, derived at read time.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceView'
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /holds:
+    post:
+      tags: [Holds]
+      summary: Authorize - reserve funds without moving them
+      description: |
+        Reserves funds on the payer for a named payee. **Posts no ledger
+        entries**: a hold is a reservation, not a movement. That is why an
+        expiry or a void needs no compensating entry - the hold simply leaves
+        `ACTIVE` and stops being subtracted from available balance.
+
+        The payee is named up front, exactly as a card authorization names the
+        merchant, so capture takes no account arguments and cannot post into the
+        wrong account.
+
+        `expiresInSeconds` must be between 60 and 604800 (7 days).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizeRequest'
+      responses:
+        '201':
+          description: Hold created and ACTIVE.
+          headers:
+            Location:
+              schema: { type: string }
+              example: /holds/7
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoldResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyInProgress' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /holds/{id}:
+    get:
+      tags: [Holds]
+      summary: Read a hold
+      description: |
+        Returns the **stored** status. A lapsed hold still reads `ACTIVE` until
+        the expiry job relabels it, because expiry is decided by comparing
+        `expiresAt` to now rather than by the label. A client asking "is this
+        still usable" should read `expiresAt`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: The hold.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoldResponse'
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /holds/{id}/capture:
+    post:
+      tags: [Holds]
+      summary: Capture - claim authorized funds
+      description: |
+        Posts the captured amount and resolves the hold. Capturing **less** than
+        was authorized is normal (the fuel-pump case): the remainder is released
+        implicitly, because it was only ever a reservation. Capturing more is
+        rejected.
+
+        A hold accepts exactly **one** capture. Repeated or split captures
+        against the same authorization are not supported; that would require a
+        running total and a row lock instead of the single conditional update
+        used here.
+
+        Performs **no funds check** - the authorization already guaranteed the
+        money, and the ledger's invariant guarantees it is still there. A hold
+        whose window has lapsed cannot be captured even if it still reads
+        `ACTIVE`, because it stopped reserving funds the moment it expired.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureAmount'
+      responses:
+        '200':
+          description: Hold captured; a CAPTURE transaction was posted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureResponse'
+              # The fuel-pump case: authorize 750.00, capture 431.00.
+              example:
+                holdId: 7
+                transactionId: 42
+                capturedMinor: 43100
+                releasedMinor: 31900
+                currency: USD
+                status: CAPTURED
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyInProgress' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /holds/{id}/void:
+    post:
+      tags: [Holds]
+      summary: Void - cancel an authorization
+      description: |
+        Releases the reservation. Posts nothing: there is no ledger entry to
+        reverse, because none was ever written. Only an `ACTIVE` hold can be
+        voided - terminal states are final.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Hold voided.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoldResponse'
+              example:
+                holdId: 7
+                accountId: 2
+                payeeAccountId: 3
+                amountMinor: 30000
+                currency: USD
+                status: VOIDED
+                expiresAt: "2026-07-26T13:00:00Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyInProgress' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /refunds:
+    post:
+      tags: [Refunds]
+      summary: Refund - give money back as reversing entries
+      description: |
+        Creates a **new** transaction of type `REFUND` that names the original
+        via `reverses_transaction_id`. The original is never modified: entries
+        are append-only, so corrections are always new postings.
+
+        Partial refunds accumulate. Refunds against one transaction may never
+        sum past what it posted.
+
+        A refund debits whoever was originally paid, so it is subject to the
+        same overdraft rule as any other debit: **no account may go negative**.
+        A merchant who has already moved the money out cannot be refunded from
+        an empty balance. In production this is where a platform reserve or an
+        underwritten negative balance would absorb the difference - a question
+        of who carries the risk, not one the ledger answers alone.
+
+        A refund cannot itself be refunded.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '201':
+          description: Refund posted.
+          headers:
+            Location:
+              schema: { type: string }
+              example: /transfers/91
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyInProgress' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+components:
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1 }
+      example: 8f14e45f-ea1a-4c2b-9d3e-5b7c1a2f6d80
+      description: |
+        A client-chosen key naming **one logical request**. The four-case
+        contract:
+
+        1. **New key** - the operation runs; the request fingerprint and the
+           serialized response are persisted atomically with the money movement.
+        2. **Same key, same request, already completed** - the stored response is
+           replayed verbatim. The operation is never re-executed.
+        3. **Same key, different request** - `422 IDEMPOTENCY_KEY_REUSED`. A key
+           names one request, not one caller.
+        4. **Same key, original still in flight** - the duplicate blocks on the
+           unique index until the winner commits, then replays its response.
+           `409 IDEMPOTENCY_IN_PROGRESS` is the backstop for a stranded record,
+           not the normal concurrent path.
+
+        Keys are scoped per operation, so the same key on `/transfers` and
+        `/holds` does not collide. Resource ids live in the fingerprint rather
+        than the scope, so reusing one key against a *different* hold is a 422
+        rather than a silently separate key.
+
+        A failed operation frees its key: a key names an operation that
+        succeeded, not an attempt that was made.
+
+  responses:
+    # Each response states its own example. A single example on the shared Error
+    # schema would render identically under every status, documenting a 404 as
+    # whatever the example happened to say.
+    BadRequest:
+      description: |
+        Malformed request. `IDEMPOTENCY_KEY_REQUIRED` (missing or blank header)
+        or `VALIDATION_FAILED` (body failed validation).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: IDEMPOTENCY_KEY_REQUIRED
+            message: Idempotency-Key header can not be blank
+    NotFound:
+      description: Unknown account, transaction or hold.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: NOT_FOUND
+            message: No hold with id 7
+    IdempotencyInProgress:
+      description: |
+        A record for this key is stranded IN_PROGRESS. Retryable - this is the
+        only 4xx in this API where retrying the identical request may succeed.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          example: 1
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: IDEMPOTENCY_IN_PROGRESS
+            message: Request is in flight
+    Unprocessable:
+      description: |
+        The request is well-formed but the domain rejects it. **Never
+        retryable** as written - see `code` for which rule was broken.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            insufficientFunds:
+              summary: Available balance is below the amount
+              value:
+                code: INSUFFICIENT_FUNDS
+                message: "Insufficient funds. Available: 70000, requested: 80000"
+            holdExpired:
+              summary: The authorization window lapsed before capture
+              value:
+                code: HOLD_EXPIRED
+                message: Hold 7 expired at 2026-07-26T12:00:00Z; it can no longer be captured
+            holdNotActive:
+              summary: Someone already captured or voided it
+              value:
+                code: HOLD_NOT_ACTIVE
+                message: Hold 7 is VOIDED; only ACTIVE holds can be resolved
+            captureExceedsHold:
+              summary: Capture larger than the authorization
+              value:
+                code: CAPTURE_EXCEEDS_HOLD
+                message: Capture of 30001 exceeds hold 7, which authorized 30000
+            refundExceedsCaptured:
+              summary: Refunds would sum past the original
+              value:
+                code: REFUND_EXCEEDS_CAPTURED
+                message: "Refund of 10000 exceeds transaction 42: 25000 of 30000 is already refunded"
+            keyReused:
+              summary: One key, two different requests
+              value:
+                code: IDEMPOTENCY_KEY_REUSED
+                message: Idempotency key reused with a different request
+
+  schemas:
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Stable machine-readable reason. The status tells a client whether a
+            retry can ever help; the code says exactly what was wrong.
+          enum:
+            - IDEMPOTENCY_KEY_REQUIRED
+            - VALIDATION_FAILED
+            - NOT_FOUND
+            - IDEMPOTENCY_IN_PROGRESS
+            - IDEMPOTENCY_KEY_REUSED
+            - INSUFFICIENT_FUNDS
+            - CURRENCY_MISMATCH
+            - HOLD_NOT_ACTIVE
+            - HOLD_EXPIRED
+            - CAPTURE_EXCEEDS_HOLD
+            - REFUND_EXCEEDS_CAPTURED
+            - UNREFUNDABLE
+            - UNPROCESSABLE
+        message:
+          type: string
+          description: Human-readable detail. Not intended for programmatic use.
+      examples:
+        - code: INSUFFICIENT_FUNDS
+          message: "Insufficient funds. Available: 70000, requested: 80000"
+
+    AmountMinor:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Amount in the currency's minor units. Never a decimal or float.
+      examples: [30000]
+
+    Currency:
+      type: string
+      pattern: '^[A-Z]{3}$'
+      description: ISO-4217 alphabetic code.
+      examples: [USD]
+
+    TransferRequest:
+      type: object
+      required: [fromAccountId, toAccountId, amountMinor, currency]
+      properties:
+        fromAccountId: { type: integer, format: int64 }
+        toAccountId: { type: integer, format: int64 }
+        amountMinor: { $ref: '#/components/schemas/AmountMinor' }
+        currency: { $ref: '#/components/schemas/Currency' }
+
+    TransferResponse:
+      type: object
+      required: [transactionId, status]
+      properties:
+        transactionId: { type: integer, format: int64 }
+        status: { type: string, enum: [POSTED] }
+
+    EntryView:
+      type: object
+      required: [accountId, direction, amountMinor, currency]
+      properties:
+        accountId: { type: integer, format: int64 }
+        direction:
+          type: string
+          enum: [DEBIT, CREDIT]
+          description: Direction carries the sign; amounts are always positive.
+        amountMinor: { $ref: '#/components/schemas/AmountMinor' }
+        currency: { $ref: '#/components/schemas/Currency' }
+
+    TransferView:
+      type: object
+      required: [transactionId, type, status, createdAt, entries]
+      properties:
+        transactionId: { type: integer, format: int64 }
+        type:
+          type: string
+          enum: [TRANSFER, CAPTURE, REFUND]
+          description: |
+            What this posting was. A capture and a plain transfer post identical
+            entries, so without this a client could not tell them apart after
+            the fact.
+        reversesTransactionId:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            The transaction this one undoes. Present only on a `REFUND`, and
+            mandatory on one - the database enforces the rule in both
+            directions.
+        status: { type: string, enum: [POSTED] }
+        createdAt: { type: string, format: date-time }
+        entries:
+          type: array
+          minItems: 2
+          description: Always sums to zero per currency.
+          items: { $ref: '#/components/schemas/EntryView' }
+
+    BalanceView:
+      type: object
+      required: [accountId, currency, postedBalance, heldMinor, availableBalance]
+      properties:
+        accountId: { type: integer, format: int64 }
+        currency: { $ref: '#/components/schemas/Currency' }
+        postedBalance:
+          type: integer
+          format: int64
+          description: Money that actually moved. Derived by signed-summing entries.
+        heldMinor:
+          type: integer
+          format: int64
+          description: |
+            Sum of active, **unexpired** holds. A lapsed hold stops counting
+            immediately, whether or not the expiry job has relabelled it.
+        availableBalance:
+          type: integer
+          format: int64
+          description: postedBalance minus heldMinor. What can be spent right now.
+
+    AuthorizeRequest:
+      type: object
+      required: [payerAccountId, payeeAccountId, amountMinor, currency, expiresInSeconds]
+      properties:
+        payerAccountId: { type: integer, format: int64 }
+        payeeAccountId: { type: integer, format: int64 }
+        amountMinor: { $ref: '#/components/schemas/AmountMinor' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        expiresInSeconds:
+          type: integer
+          format: int64
+          minimum: 60
+          maximum: 604800
+          description: |
+            Client-supplied because auth windows are domain-specific - a
+            fuel-pump pre-auth is not a hotel incidental hold.
+          examples: [3600]
+
+    HoldResponse:
+      type: object
+      required: [holdId, accountId, payeeAccountId, amountMinor, currency, status, expiresAt]
+      properties:
+        holdId: { type: integer, format: int64 }
+        accountId:
+          type: integer
+          format: int64
+          description: The payer, whose funds are reserved.
+        payeeAccountId: { type: integer, format: int64 }
+        amountMinor: { $ref: '#/components/schemas/AmountMinor' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        status:
+          type: string
+          enum: [ACTIVE, CAPTURED, VOIDED, EXPIRED]
+          description: Terminal states are final; a hold never returns to ACTIVE.
+        expiresAt: { type: string, format: date-time }
+
+    CaptureAmount:
+      type: object
+      required: [amountMinor]
+      properties:
+        amountMinor:
+          allOf:
+            - $ref: '#/components/schemas/AmountMinor'
+          description: May be less than the authorized amount, never more.
+
+    CaptureResponse:
+      type: object
+      required: [holdId, transactionId, capturedMinor, releasedMinor, currency, status]
+      properties:
+        holdId: { type: integer, format: int64 }
+        transactionId:
+          type: integer
+          format: int64
+          description: The CAPTURE transaction that was posted. Readable via GET /transfers/{id}.
+        capturedMinor: { type: integer, format: int64 }
+        releasedMinor:
+          type: integer
+          format: int64
+          description: |
+            Authorized minus captured. Released implicitly - it was a
+            reservation, never money, so nothing is reversed.
+        currency: { $ref: '#/components/schemas/Currency' }
+        status: { type: string, enum: [CAPTURED] }
+
+    RefundRequest:
+      type: object
+      required: [transactionId, amountMinor]
+      properties:
+        transactionId:
+          type: integer
+          format: int64
+          description: The TRANSFER or CAPTURE being reversed.
+        amountMinor: { $ref: '#/components/schemas/AmountMinor' }
+
+    RefundResponse:
+      type: object
+      required:
+        [refundTransactionId, reversedTransactionId, amountMinor, currency,
+         totalRefundedMinor, remainingRefundableMinor]
+      properties:
+        refundTransactionId: { type: integer, format: int64 }
+        reversedTransactionId: { type: integer, format: int64 }
+        amountMinor: { $ref: '#/components/schemas/AmountMinor' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        totalRefundedMinor:
+          type: integer
+          format: int64
+          description: Including this refund. Derived from entries, never stored.
+        remainingRefundableMinor: { type: integer, format: int64 }
