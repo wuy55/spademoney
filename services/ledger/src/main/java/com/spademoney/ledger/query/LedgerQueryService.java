@@ -12,25 +12,18 @@ import com.spademoney.ledger.transfer.EntryView;
 import com.spademoney.ledger.transfer.TransferView;
 
 /**
- * Read side. Pure queries — no locking, no mutation.
- *
- * Balances are derived by signed-summing the entries table, never read from a
- * cached column. A read-side cache would have to be reconciled against the
- * derived sum before it could be trusted.
+ * Read side. Pure queries -- no locking, no mutation.
  */
 @Service
 @Transactional(readOnly = true)
 public class LedgerQueryService {
 
-    private static final String BALANCE_SQL = """
-            SELECT COALESCE(SUM(CASE WHEN direction='CREDIT' THEN amount_minor ELSE -amount_minor END), 0)
-            FROM entries WHERE account_id = ?
-            """;
-
     private final JdbcClient jdbcClient;
+    private final AccountBalances balances;
 
-    public LedgerQueryService(JdbcClient jdbcClient) {
+    public LedgerQueryService(JdbcClient jdbcClient, AccountBalances balances) {
         this.jdbcClient = jdbcClient;
+        this.balances = balances;
     }
 
     public Optional<BalanceView> findBalance(Long accountId) {
@@ -44,24 +37,28 @@ public class LedgerQueryService {
             return Optional.empty();
         }
 
-        long posted = jdbcClient
-                .sql(BALANCE_SQL)
-                .param(accountId)
-                .query(Long.class)
-                .single();
-
-        return Optional.of(new BalanceView(accountId, currency.get(), posted));
+        long posted = balances.posted(accountId);
+        long held = balances.held(accountId);
+        return Optional.of(new BalanceView(accountId, currency.get(), posted, held, posted - held));
     }
 
-    private record TransferHeader(Long id, String status, java.time.OffsetDateTime createdAt) {
+    private record TransferHeader(Long id, String type, Long reversesTransactionId,
+            String status, java.time.OffsetDateTime createdAt) {
     }
 
     public Optional<TransferView> findTransfer(Long transactionId) {
         Optional<TransferHeader> header = jdbcClient
-                .sql("SELECT id, status, created_at FROM transactions WHERE id = ?")
+                .sql("""
+                        SELECT id, type, reverses_transaction_id, status, created_at
+                          FROM transactions WHERE id = ?
+                        """)
                 .param(transactionId)
                 .query((rs, rowNum) -> new TransferHeader(
                         rs.getLong("id"),
+                        rs.getString("type"),
+                        // Null for everything except a REFUND -- getObject, not
+                        // getLong, so SQL NULL stays null instead of becoming 0.
+                        rs.getObject("reverses_transaction_id", Long.class),
                         rs.getString("status"),
                         rs.getObject("created_at", java.time.OffsetDateTime.class)))
                 .optional();
@@ -84,6 +81,7 @@ public class LedgerQueryService {
                 .list();
 
         TransferHeader h = header.get();
-        return Optional.of(new TransferView(h.id(), h.status(), h.createdAt(), entries));
+        return Optional.of(new TransferView(h.id(), h.type(), h.reversesTransactionId(),
+                h.status(), h.createdAt(), entries));
     }
 }

@@ -5,7 +5,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.spademoney.ledger.money.Money;
+import com.spademoney.ledger.query.AccountBalances;
 
+/**
+ * The only class that writes to transactions and entries.
+ *
+ * The overdraft check reads AVAILABLE (posted minus active holds), never posted
+ * alone. That is what keeps the safety invariant true:
+ *
+ *     for every account, at all times, posted >= sum(active holds)
+ *
+ * Because every debit path subtracts holds before deciding, a payer can never
+ * spend down past what is reserved -- which is exactly why capture can post
+ * unconditionally without re-checking funds.
+ *
+ * Both accounts are locked in ascending id order with FOR UPDATE. The lock is
+ * taken BEFORE the balance read so no one can post an entry in the gap between
+ * reading a balance and inserting against it; that gap is where double-spend
+ * lives.
+ */
 @Service
 public class LedgerTransactionService {
 
@@ -13,80 +31,85 @@ public class LedgerTransactionService {
     }
 
     private final JdbcClient jdbcClient;
+    private final AccountBalances balances;
 
-    public LedgerTransactionService(JdbcClient jdbcClient) {
+    public LedgerTransactionService(JdbcClient jdbcClient, AccountBalances balances) {
         this.jdbcClient = jdbcClient;
+        this.balances = balances;
     }
 
     @Transactional
     public Long transfer(Long fromAccountId, Long toAccountId, Money amount) {
-        // ========== STEP 1: Lock both accounts in ascending order ==========
-        Long account1Id = Math.min(fromAccountId, toAccountId);
-        Long account2Id = Math.max(fromAccountId, toAccountId);
+        lockBothAscending(fromAccountId, toAccountId, amount.currency().getCurrencyCode());
+
+        long available = balances.available(fromAccountId);
+        if (available < amount.amountMinor()) {
+            throw new InsufficientFundsException(available, amount.amountMinor());
+        }
+
+        Long transactionId = createTransaction("TRANSFER", null);
+        postDoubleEntry(transactionId, fromAccountId, toAccountId, amount);
+        return transactionId;
+    }
+
+    /**
+     * Ascending-id acquisition is the whole deadlock argument (ADR-006): two
+     * transfers in opposite directions request the same two locks in the same
+     * order, so no cycle can form.
+     */
+    public void lockBothAscending(Long a, Long b, String requestedCurrency) {
+        Long lo = Math.min(a, b);
+        Long hi = Math.max(a, b);
 
         var accounts = jdbcClient
                 .sql("SELECT id, currency FROM accounts WHERE id IN (?, ?) ORDER BY id ASC FOR UPDATE")
-                .params(account1Id, account2Id)
-                .query((rs, rowNum) -> new AccountRow(
-                        rs.getLong("id"),
-                        rs.getString("currency")))
+                .params(lo, hi)
+                .query((rs, rowNum) -> new AccountRow(rs.getLong("id"), rs.getString("currency")))
                 .list();
 
         if (accounts.size() != 2) {
-            throw new IllegalArgumentException("One or both accounts not found");
+            throw new AccountNotFoundInLedgerException(lo, hi);
         }
-
-        var account1 = accounts.get(0);
-        var account2 = accounts.get(1);
-
-        // ========== STEP 2: Validate the money ==========
-        String amountCurrencyCode = amount.currency().getCurrencyCode();
-
-        if (!account1.currency().equals(amountCurrencyCode)) {
-            throw new IllegalArgumentException(
-                    "Account 1 currency mismatch: expected " + amountCurrencyCode + ", got " + account1.currency());
+        for (AccountRow row : accounts) {
+            if (!row.currency().equals(requestedCurrency)) {
+                throw new CurrencyMismatchException(row.id(), row.currency(), requestedCurrency);
+            }
         }
-        if (!account2.currency().equals(amountCurrencyCode)) {
-            throw new IllegalArgumentException(
-                    "Account 2 currency mismatch: expected " + amountCurrencyCode + ", got " + account2.currency());
-        }
-        if (amount.amountMinor() <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
-        }
+    }
 
-        // ========== STEP 3: Check sender's posted balance ==========
-        Long senderBalance = jdbcClient
-                .sql("SELECT COALESCE(SUM(CASE WHEN direction='CREDIT' THEN amount_minor ELSE -amount_minor END), 0) FROM entries WHERE account_id = ?")
-                .param(fromAccountId)
+    /**
+     * Ledger primitive. Public because capture and refund compose it with their
+     * own policy: this service is the only thing that writes to transactions and
+     * entries, but it is not the only thing that decides WHEN to.
+     */
+    public Long createTransaction(String type, Long reversesTransactionId) {
+        return jdbcClient
+                .sql("INSERT INTO transactions(type, reverses_transaction_id) VALUES (?, ?) RETURNING id")
+                .params(type, reversesTransactionId)
                 .query(Long.class)
                 .single();
+    }
 
-        if (senderBalance < amount.amountMinor()) {
-            throw new IllegalArgumentException(
-                    "Insufficient funds. Balance: " + senderBalance + ", requested: " + amount.amountMinor());
-        }
-
-        // ========== STEP 4: Create the transaction ==========
-        Long transactionId = jdbcClient
-                .sql("INSERT INTO transactions DEFAULT VALUES RETURNING id")
-                .query(Long.class)
-                .single();
-
-        // ========== STEP 5: Post two entries (debit and credit) ==========
+    /**
+     * Both sides in ONE statement so the deferred entries_balanced trigger sees
+     * a complete, balanced transaction rather than firing mid-insert on a
+     * one-sided posting.
+     *
+     * Ledger primitive, and deliberately unguarded: it posts what it is told.
+     * Every caller is responsible for having established that the debit is
+     * covered -- transfer and refund by checking available under a lock,
+     * capture by the hold that already reserved the funds.
+     */
+    public void postDoubleEntry(Long transactionId, Long debitAccountId, Long creditAccountId, Money amount) {
         String currencyCode = amount.currency().getCurrencyCode();
-
-        // Both entries in ONE statement — trigger sees balanced transaction
         jdbcClient.sql("""
-        INSERT INTO entries(transaction_id, account_id, direction, amount_minor, currency)
-        VALUES
-            (?, ?, 'DEBIT', ?, ?),
-            (?, ?, 'CREDIT', ?, ?)
-        """)
-        .params(transactionId, fromAccountId, amount.amountMinor(), currencyCode,
-                transactionId, toAccountId, amount.amountMinor(), currencyCode)
-        .update();
-
-        // ========== STEP 6: Return the transaction ID ==========
-        return transactionId;
+                INSERT INTO entries(transaction_id, account_id, direction, amount_minor, currency)
+                VALUES
+                    (?, ?, 'DEBIT',  ?, ?),
+                    (?, ?, 'CREDIT', ?, ?)
+                """)
+                .params(transactionId, debitAccountId, amount.amountMinor(), currencyCode,
+                        transactionId, creditAccountId, amount.amountMinor(), currencyCode)
+                .update();
     }
 }
