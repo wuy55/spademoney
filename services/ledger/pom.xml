@@ -3,32 +3,16 @@
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<parent>
-		<groupId>org.springframework.boot</groupId>
-		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.1.0</version>
-		<relativePath/> <!-- lookup parent from repository -->
+		<groupId>com.spademoney</groupId>
+		<artifactId>spademoney</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../../pom.xml</relativePath>
 	</parent>
-	<groupId>com.spademoney</groupId>
+
 	<artifactId>ledger</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
-	<name/>
-	<description/>
-	<url/>
-	<licenses>
-		<license/>
-	</licenses>
-	<developers>
-		<developer/>
-	</developers>
-	<scm>
-		<connection/>
-		<developerConnection/>
-		<tag/>
-		<url/>
-	</scm>
-	<properties>
-		<java.version>25</java.version>
-	</properties>
+	<name>ledger</name>
+	<description>Double-entry ledger: transfers, holds, captures, refunds</description>
+
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -100,11 +84,11 @@
 			<artifactId>testcontainers-postgresql</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Version managed in the parent; pinned to 1.9.3, see ADR-009. -->
 		<dependency>
-    		<groupId>net.jqwik</groupId>
-    		<artifactId>jqwik</artifactId>
-    		<version>1.9.3</version>
-    		<scope>test</scope>
+			<groupId>net.jqwik</groupId>
+			<artifactId>jqwik</artifactId>
+			<scope>test</scope>
 		</dependency>
 	</dependencies>
 
