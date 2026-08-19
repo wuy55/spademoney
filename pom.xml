@@ -31,6 +31,7 @@
 
 	<modules>
 		<module>services/ledger</module>
+		<module>services/payments</module>
 	</modules>
 
 	<properties>
