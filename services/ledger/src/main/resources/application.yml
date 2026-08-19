@@ -1,10 +1,33 @@
+# Merged from the old application.yml + application.yaml pair. Boot loads both
+# extensions and silently merges them, which is a good way to spend an evening
+# wondering where a property came from. One file, one place to look.
 spring:
+  application:
+    name: ledger
+
   datasource:
-    url: jdbc:postgresql://localhost:5432/spademoney
+    # Moved from the `spademoney` database to `ledger` in M3: the Ledger and
+    # Payments now hold separate databases in the same Postgres instance, so
+    # that no transaction can span the two. Migrations are unchanged.
+    url: jdbc:postgresql://localhost:5432/ledger
     username: spademoney
     password: spademoney
+
   flyway:
     enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health only -- the compose healthcheck and the Session 12 chaos script
+        # need a machine-readable "the Ledger is back" signal. Retrofitting that
+        # later, while debugging a kill script, is miserable.
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
 
 spademoney:
   holds:

@@ -1,13 +1,88 @@
+# Postgres + both services. `docker compose up --build` is the whole demo.
+#
+# The volume is named pgdata-m3 rather than pgdata because M3 changed the
+# database layout: init scripts in docker-entrypoint-initdb.d are skipped
+# entirely when the data volume already exists, so an M2-era `pgdata` would come
+# up without the `ledger` and `payments` databases and both services would fail
+# to start with a confusing "database does not exist". A new volume name forces
+# a clean initialisation.
+
 services:
   postgres:
     image: postgres:16
     environment:
+      # The maintenance database. The two databases the services actually use
+      # are created by the init script below.
       POSTGRES_DB: spademoney
       POSTGRES_USER: spademoney
       POSTGRES_PASSWORD: spademoney
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata-m3:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -d spademoney, not the default: pg_isready against a database that does
+      # not exist still reports "accepting connections", so the plain form would
+      # go healthy before the init script had run.
+      test: ["CMD-SHELL", "pg_isready -U spademoney -d spademoney"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  ledger:
+    build:
+      # Context is the repo root: the build needs the reactor pom and wrapper.
+      context: .
+      dockerfile: services/ledger/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ledger
+      SPRING_DATASOURCE_USERNAME: spademoney
+      SPRING_DATASOURCE_PASSWORD: spademoney
+    ports:
+      - "8080:8080"
+    healthcheck:
+      # The signal the Session 12 chaos script waits on after restarting this
+      # container. Wiring it now is much cheaper than retrofitting it while
+      # debugging a kill script.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  payments:
+    build:
+      context: .
+      dockerfile: services/payments/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ledger:
+        # STARTUP ORDERING ONLY. This keeps the first curl of a fresh `compose
+        # up` from hitting a Ledger that is still migrating; it is not part of
+        # any correctness argument. Payments must behave correctly when the
+        # Ledger goes away *after* startup -- that is precisely what the chaos
+        # test does, and a service that needed this condition to stay correct
+        # would fail it.
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payments
+      SPRING_DATASOURCE_USERNAME: spademoney
+      SPRING_DATASOURCE_PASSWORD: spademoney
+      SPADEMONEY_LEDGER_BASE_URL: http://ledger:8080
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
 volumes:
-  pgdata:
+  pgdata-m3:
