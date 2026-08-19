@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: payments
+
+  datasource:
+    # Its own database, in the same Postgres instance as the Ledger's.
+    #
+    # Two databases rather than two schemas is the point: Postgres offers no
+    # cross-database transaction without PREPARE TRANSACTION, so "just wrap both
+    # writes in one transaction" is not merely discouraged here, it is
+    # unavailable. The impossibility of a distributed transaction across this
+    # seam is enforced by the engine instead of by discipline.
+    #
+    # One container for both is a laptop concession: they share a failure
+    # domain. That does not weaken the Session 12 chaos test, which kills
+    # application containers, not the database.
+    url: jdbc:postgresql://localhost:5432/payments
+    username: spademoney
+    password: spademoney
+
+  flyway:
+    enabled: true
+
+  http:
+    clients:
+      # The Ledger client's timeouts. Not decoration -- Spring's default is
+      # effectively "wait forever", which turns a killed Ledger into a hung
+      # request instead of a 504 with a name. See LedgerClientConfig for why
+      # they live in configuration rather than in code, and LedgerTimeoutsTest
+      # for the assertion that keeps them here.
+      connect-timeout: 2s
+      read-timeout: 5s
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health only. The compose healthcheck and the Session 12 chaos script
+        # need one machine-readable "is it back yet" signal, not a management
+        # surface.
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+spademoney:
+  ledger:
+    # Overridden by compose to http://ledger:8080.
+    base-url: http://localhost:8080
