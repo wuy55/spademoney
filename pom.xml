@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+		Aggregator and version authority for both services.
+
+		The two services deliberately share no code (ADR-007: exactly two
+		services; no shared module). They do share *versions*: Boot, Java and
+		jqwik are pinned here so the services cannot drift onto different
+		Jackson or Spring generations and start disagreeing over the wire for
+		reasons nobody can see in either service's pom.
+
+		Sharing a parent pom is not sharing a library. Nothing compiled here
+		ends up on either service's classpath.
+	-->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.0</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+
+	<groupId>com.spademoney</groupId>
+	<artifactId>spademoney</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>spademoney</name>
+	<description>Distributed payments ledger</description>
+
+	<modules>
+		<module>services/ledger</module>
+	</modules>
+
+	<properties>
+		<java.version>25</java.version>
+		<!--
+			jqwik is pinned to 1.9.3 and must not be bumped: 1.10+ embeds
+			anti-AI protestware. See ADR-009.
+		-->
+		<jqwik.version>1.9.3</jqwik.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- Not in Boot's BOM, so its version is managed here instead. -->
+			<dependency>
+				<groupId>net.jqwik</groupId>
+				<artifactId>jqwik</artifactId>
+				<version>${jqwik.version}</version>
+				<scope>test</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<pluginManagement>
+			<plugins>
+				<plugin>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-maven-plugin</artifactId>
+				</plugin>
+			</plugins>
+		</pluginManagement>
+	</build>
+
+</project>

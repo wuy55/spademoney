@@ -14,6 +14,10 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      # One reactor build from the root, not two per-service builds. Both
+      # modules inherit their versions from the root pom, so building them
+      # separately would let a change to that pom pass CI while breaking the
+      # other service. Testcontainers uses the runner's Docker daemon, which
+      # ubuntu-latest provides.
       - name: Build and test
         run: ./mvnw --batch-mode verify
-        working-directory: services/ledger
