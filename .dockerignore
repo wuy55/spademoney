@@ -1,0 +1,11 @@
+# Both images build from the repo root so the reactor pom and the wrapper are in
+# context. Everything below either bloats the context or would poison the build
+# with host-built artifacts.
+.git
+.github
+.vscode
+**/target
+*.md
+docs
+docker-compose.yml
+**/.jqwik-database
