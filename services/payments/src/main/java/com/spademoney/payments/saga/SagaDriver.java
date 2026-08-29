@@ -37,11 +37,22 @@ import tools.jackson.databind.ObjectMapper;
  * </pre>
  *
  * <h2>Why exhausting retries is a terminal failure and not a stuck saga</h2>
- * A step that keeps timing out is retried a bounded number of times and then
- * treated as terminal. Retrying forever leaves a payment that never resolves --
- * no charge, no decline, no answer — which is the worst outcome for everyone
- * involved. Giving up compensates, releases the payer's funds, and produces a
- * decline the customer can act on.
+ * A forward step that keeps timing out is retried a bounded number of times and
+ * then treated as terminal. Retrying forever leaves a payment that never
+ * resolves — no charge, no decline, no answer — which is the worst outcome for
+ * everyone involved. Giving up compensates, releases the payer's funds, and
+ * produces a decline the customer can act on.
+ *
+ * <h2>A compensation gets a far larger budget, and the asymmetry is the point</h2>
+ * "Declined" is a real answer to a forward step, so giving up on one is a
+ * decision the system is allowed to make. There is no equivalent answer for a
+ * compensation: the alternative to releasing the payer's funds is leaving them
+ * reserved behind a payment that has already failed, which is not an outcome
+ * anybody chose. So compensations retry roughly an order of magnitude longer
+ * before escalating. This came out of the chaos scenario -- with one shared
+ * budget, an outage long enough to decline a payment was also long enough to
+ * fail its compensation, and the system reported a dead end it would have
+ * cleared itself given a few more seconds.
  *
  * <h2>The one honest dead end</h2>
  * If a COMPENSATION exhausts its retries, the saga is marked FAILED with
@@ -157,8 +168,11 @@ public class SagaDriver {
 
     private void onRetry(PaymentSaga saga, String step, StepOutcome.Retry retry) {
         int attempts = sagas.recordAttempt(saga.id(), step, retry.reason());
+        int budget = SagaPlan.COMPENSATION.equals(SagaPlan.kindOf(step))
+                ? properties.compensationMaxAttempts()
+                : properties.maxAttempts();
 
-        if (attempts >= properties.maxAttempts()) {
+        if (attempts >= budget) {
             log.warn("Saga {} step {} exhausted {} attempts: {}",
                     saga.id(), step, attempts, retry.reason());
             onTerminal(saga, step, CODE_STEP_EXHAUSTED,

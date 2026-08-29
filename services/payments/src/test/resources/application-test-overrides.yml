@@ -32,6 +32,10 @@ spademoney:
     enabled: false
     # No jitter window worth speaking of, so a retry scheduled by one tick is
     # due by the next one and tests do not have to sleep through a backoff.
+    # Small budgets so the exhaustion tests do not have to drive dozens of ticks.
+    # The asymmetry between the two is what the tests care about, not the sizes.
+    max-attempts: 5
+    compensation-max-attempts: 12
     base-backoff: PT0.001S
     max-backoff: PT0.005S
   reconciliation:

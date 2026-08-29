@@ -419,6 +419,41 @@ class PaymentSagaTest {
         assertThat(after.failureMessage()).contains("HOLD_ALREADY_CAPTURED");
     }
 
+    /**
+     * A compensation gets a much larger retry budget than a forward step, and
+     * the asymmetry is deliberate.
+     *
+     * "Declined" is a real answer to a forward step, so giving up on one is a
+     * decision the system may make. There is no equivalent for a compensation:
+     * the alternative to releasing the payer's funds is leaving them reserved
+     * behind a payment that already failed. Here the void is refused with a 5xx
+     * more times than a forward step would tolerate, and the saga keeps trying.
+     */
+    @Test
+    void aCompensationKeepsTryingLongAfterAForwardStepWouldHaveGivenUp() {
+        limits.setCap(PAYER, 1_000L, "USD");
+        expectAuthorize(withHold(87L, "ACTIVE"));
+        // Six failures: one more than max-attempts, which would have ended a
+        // forward step outright.
+        ledger.expect(ExpectedCount.times(6), requestTo("http://localhost:8080/holds/87/void"))
+                .andRespond(withServerError());
+
+        PaymentView accepted = start("key-stubborn-compensation");
+        drive(8);
+
+        PaymentView after = reload(accepted);
+        assertThat(after.sagaStatus()).isEqualTo(PaymentSaga.COMPENSATING);
+        assertThat(after.failureCode()).isEqualTo("PAYMENT_LIMIT_EXCEEDED");
+
+        // And it still finishes once the Ledger comes back.
+        ledger.reset();
+        ledger.expect(requestTo("http://localhost:8080/holds/87/void"))
+                .andRespond(withHold(87L, "VOIDED"));
+        drive(3);
+
+        assertThat(reload(accepted).sagaStatus()).isEqualTo(PaymentSaga.COMPENSATED);
+    }
+
     // ------------------------------------------------------------- utilities
 
     private PaymentView start(String key) {

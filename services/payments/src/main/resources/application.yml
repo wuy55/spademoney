@@ -124,7 +124,14 @@ spademoney:
     # so an in-flight step is never double-driven under normal operation. It is a
     # safety net for a crashed driver, not part of ordinary flow.
     lease: PT30S
-    max-attempts: 5
+    # Forward steps: bounded, because "declined" is an acceptable answer and a
+    # payment that never resolves is not. Comfortably longer than a ledger
+    # restart, so an ordinary deploy does not decline anything.
+    max-attempts: 8
+    # Compensations: far more persistent, because there is no acceptable
+    # alternative to releasing the payer's funds. Escalation to a human is the
+    # last resort, not the first timeout.
+    compensation-max-attempts: 50
     base-backoff: PT0.2S
     max-backoff: PT10S
     # Must outlast the whole retry schedule with room to spare: a hold that
