@@ -4,7 +4,10 @@ import java.util.Map;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -31,6 +34,7 @@ import com.spademoney.ledger.transfer.TransferNotFoundException;
  *
  * 400 IDEMPOTENCY_KEY_REQUIRED  missing or blank Idempotency-Key
  * 400 VALIDATION_FAILED         body failed @Valid
+ * 400 MALFORMED_REQUEST        body could not be parsed into the request type at all
  * 404 NOT_FOUND                 unknown account / transfer / hold
  * 409 IDEMPOTENCY_IN_PROGRESS   original request for this key still in flight (+ Retry-After)
  * 422 IDEMPOTENCY_KEY_REUSED    key reused with a different request fingerprint
@@ -49,8 +53,56 @@ import com.spademoney.ledger.transfer.TransferNotFoundException;
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
+    // Content-Type set explicitly. An error response without one leaves a client
+    // guessing whether it can parse the body, and a client parsing errors by
+    // guesswork eventually logs a stack trace instead of a decline code.
     private static ResponseEntity<Map<String, String>> body(HttpStatus status, String code, String message) {
-        return ResponseEntity.status(status).body(Map.of("code", code, "message", message));
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", code, "message", message));
+    }
+
+    /**
+     * A body that failed @Valid.
+     *
+     * This handler was missing, and docs/openapi.yaml has been promising
+     * VALIDATION_FAILED since M2 -- so the published spec named a code this
+     * service never actually sent. What it really returned was Spring's default
+     * for an unhandled MethodArgumentNotValidException: a 400 with an empty body
+     * and nothing machine-readable in it. The same class of gap the missing
+     * Idempotency-Key handler closed, found by probing the neighbouring service.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, String>> onInvalidBody(MethodArgumentNotValidException ex) {
+        String detail = ex.getBindingResult().getFieldErrors().stream()
+                .map(error -> error.getField() + " " + error.getDefaultMessage())
+                .sorted()
+                .reduce((a, b) -> a + "; " + b)
+                .orElse("request body failed validation");
+        return body(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", detail);
+    }
+
+    /**
+     * The body could not be parsed into the request type at all, so no
+     * validation ever ran.
+     *
+     * <h2>Jackson 3 changed the default that makes this reachable</h2>
+     * FAIL_ON_NULL_FOR_PRIMITIVES is ON by default in Jackson 3 and was OFF in
+     * Jackson 2. A body that simply omits amountMinor -- a primitive long --
+     * therefore fails during deserialization rather than during @Valid, and
+     * never reaches the handler above. Without this, the single most likely
+     * client mistake there is, forgetting a field, produced a 400 with an empty
+     * body.
+     *
+     * The message is written here rather than passed through: the parser's own
+     * text names internal types and enum constants that are nobody else's
+     * business.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, String>> onUnreadableBody(HttpMessageNotReadableException ex) {
+        return body(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST",
+                "Request body could not be parsed; check that every field is present "
+                        + "and of the right type");
     }
 
     @ExceptionHandler(BlankIdempotencyKeyException.class)

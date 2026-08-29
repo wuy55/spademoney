@@ -375,8 +375,11 @@ components:
     # whatever the example happened to say.
     BadRequest:
       description: |
-        Malformed request. `IDEMPOTENCY_KEY_REQUIRED` (missing or blank header)
-        or `VALIDATION_FAILED` (body failed validation).
+        Malformed request. `IDEMPOTENCY_KEY_REQUIRED` (missing or blank header),
+        `VALIDATION_FAILED` (body parsed but failed validation), or
+        `MALFORMED_REQUEST` (body could not be parsed into the request type at
+        all -- most often a missing numeric field, which fails during
+        deserialization before validation runs).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -458,6 +461,7 @@ components:
           enum:
             - IDEMPOTENCY_KEY_REQUIRED
             - VALIDATION_FAILED
+            - MALFORMED_REQUEST
             - NOT_FOUND
             - IDEMPOTENCY_IN_PROGRESS
             - IDEMPOTENCY_KEY_REUSED

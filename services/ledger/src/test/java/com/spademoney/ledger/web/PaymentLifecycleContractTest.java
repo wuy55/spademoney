@@ -33,7 +33,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * Error codes covered: HOLD_NOT_ACTIVE, HOLD_EXPIRED, CAPTURE_EXCEEDS_HOLD,
  * REFUND_EXCEEDS_CAPTURED, UNREFUNDABLE, INSUFFICIENT_FUNDS,
- * IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_KEY_REQUIRED, NOT_FOUND.
+ * IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_KEY_REQUIRED, VALIDATION_FAILED,
+ * MALFORMED_REQUEST, NOT_FOUND.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -445,5 +446,63 @@ class PaymentLifecycleContractTest {
 
     private int holdCount() {
         return jdbcClient.sql("SELECT COUNT(*) FROM holds").query(Integer.class).single();
+    }
+
+    // ------------------------------------------------------- malformed requests
+
+    /**
+     * The spec has promised VALIDATION_FAILED since M2 and the service did not
+     * send it.
+     *
+     * There was no MethodArgumentNotValidException handler, so a body that
+     * failed @Valid got Spring's default: 400 with an empty body and nothing
+     * machine-readable in it. The document said one thing, the service did
+     * another, and no test compared them -- which is the exact failure a
+     * hand-written spec is most prone to and the reason this class exists.
+     */
+    @Test
+    void aBodyThatFailsValidationAnswers400WithACode() throws Exception {
+        mockMvc.perform(post("/transfers")
+                        .header("Idempotency-Key", "validation-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fromAccountId":%d,"toAccountId":%d,"amountMinor":-5,"currency":"USD"}
+                                """.formatted(payer, payee)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * A body missing a numeric field, which fails EARLIER than validation.
+     *
+     * amountMinor is a primitive long and Jackson 3 turns on
+     * FAIL_ON_NULL_FOR_PRIMITIVES (Jackson 2 had it off), so omitting it breaks
+     * during deserialization and never reaches @Valid at all. Different
+     * exception, same symptom before it was handled: a 400 with no body, on the
+     * most likely client mistake there is.
+     */
+    @Test
+    void aBodyMissingANumericFieldAnswers400WithACode() throws Exception {
+        mockMvc.perform(post("/transfers")
+                        .header("Idempotency-Key", "malformed-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fromAccountId":%d,"toAccountId":%d,"currency":"USD"}
+                                """.formatted(payer, payee)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST"));
+    }
+
+    /** No money moved on either of the two rejections above. */
+    @Test
+    void aRejectedRequestPostsNothing() throws Exception {
+        mockMvc.perform(post("/transfers")
+                .header("Idempotency-Key", "malformed-2")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(jdbcClient.sql("SELECT count(*) FROM entries").query(Long.class).single()).isEqualTo(2L);
     }
 }
