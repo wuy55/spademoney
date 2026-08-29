@@ -100,6 +100,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redpanda:
+        # Startup ordering only. Payments consumes the Ledger's events, and with
+        # the broker down it simply consumes nothing -- the events wait in the
+        # Ledger's outbox and arrive when it returns. Nothing here needs the
+        # broker to be correct, only to be eventually reachable.
+        condition: service_healthy
       ledger:
         # STARTUP ORDERING ONLY. This keeps the first curl of a fresh `compose
         # up` from hitting a Ledger that is still migrating; it is not part of
@@ -113,6 +119,7 @@ services:
       SPRING_DATASOURCE_USERNAME: spademoney
       SPRING_DATASOURCE_PASSWORD: spademoney
       SPADEMONEY_LEDGER_BASE_URL: http://ledger:8080
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     ports:
       - "8081:8081"
     healthcheck:

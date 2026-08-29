@@ -46,6 +46,6 @@ class PaymentsApplicationTests {
     void paymentsOwnsItsOwnFlywayHistory() {
         assertThat(jdbcClient.sql("SELECT script FROM flyway_schema_history ORDER BY installed_rank")
                 .query(String.class).list())
-                .containsExactly("V1__payment_limits.sql");
+                .containsExactly("V1__payment_limits.sql", "V2__inbox.sql");
     }
 }

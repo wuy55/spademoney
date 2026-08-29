@@ -35,6 +35,17 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-jdbc</artifactId>
 		</dependency>
+		<!--
+			Consumes the Ledger's event stream. Note the direction: Payments
+			never PUBLISHES to Kafka. Commands go to the Ledger over HTTP,
+			because a command can be refused and a caller needs the refusal;
+			facts come back over Kafka, because a fact has already happened and
+			nobody may refuse it.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-restclient</artifactId>
@@ -73,6 +84,11 @@
 			<artifactId>spring-boot-starter-jdbc-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka-test</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- Brings MockRestServiceServer and its Boot auto-configuration. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -102,6 +118,11 @@
 		<dependency>
 			<groupId>org.testcontainers</groupId>
 			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-redpanda</artifactId>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

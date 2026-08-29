@@ -21,6 +21,52 @@ spring:
   flyway:
     enabled: true
 
+  # Layers an optional overrides file on top of everything below. The file does
+  # not exist in the packaged jar; it exists only on the TEST classpath.
+  #
+  # This is here because the obvious alternative is a trap. A file named
+  # application.yml under src/test/resources does not merge with this one, it
+  # REPLACES it -- same classpath resource name, test-classes first -- so every
+  # value here silently vanishes in tests. That is how a test asserting the HTTP
+  # timeouts ends up asserting a value the test's own config file supplied,
+  # proving nothing about the configuration that actually ships.
+  #
+  # An import keeps this file loaded and lets the test file override only what
+  # it needs to.
+  config:
+    import: "optional:classpath:/application-test-overrides.yml"
+
+  kafka:
+    # Overridden by compose to redpanda:9092.
+    bootstrap-servers: localhost:19092
+    consumer:
+      group-id: payments
+      # earliest, not latest. A consumer group that starts at the end silently
+      # skips everything published before it first connected -- which on a fresh
+      # `compose up`, or after this service is rebuilt, is exactly the events it
+      # most needs. The inbox makes re-reading old events free, so there is no
+      # reason to risk missing any.
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Offsets are committed by the container after the listener returns, not
+      # on a timer. With auto-commit a periodic commit can land in the middle of
+      # processing, so a crash would skip an event that was never applied --
+      # at-most-once, silently.
+      enable-auto-commit: false
+    listener:
+      # Commit the offset after each record's local transaction has committed.
+      # The two commits are still separate systems, so a crash between them
+      # redelivers -- that is the at-least-once the inbox is built to absorb,
+      # and it is the safe side of the trade.
+      ack-mode: record
+    producer:
+      # Used only by the dead-letter publisher. Payments puts nothing on the
+      # domain stream.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+
   http:
     clients:
       # The Ledger client's timeouts. Not decoration -- Spring's default is
@@ -51,3 +97,6 @@ spademoney:
   ledger:
     # Overridden by compose to http://ledger:8080.
     base-url: http://localhost:8080
+    # The Ledger publishes here; Payments only reads. The name is the Ledger's
+    # to choose, which is why it is configuration rather than a constant.
+    events-topic: spademoney.ledger.events

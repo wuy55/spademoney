@@ -1,0 +1,24 @@
+# Test-only overrides, layered on top of src/main/resources/application.yml via
+# the spring.config.import declared there.
+#
+# Nothing else is restated, and that is the point: LedgerTimeoutsTest asserts the
+# connect and read timeouts, and it is only worth anything if the values it reads
+# are the ones that ship. A test config file that redefined them would turn that
+# test into a tautology.
+#
+# Kafka is switched off by default here rather than pointed at a broker. Almost
+# every test in this module is about HTTP translation, validation or the saga's
+# local state machine, and none of those need one. Leaving the listener enabled
+# would mean each of those contexts starts a consumer that spends the test
+# retrying a connection to nothing, filling the log with failures nobody is
+# looking for.
+#
+# The tests that do need a broker turn these back on themselves, next to the
+# Redpanda container they declare -- so the requirement is visible in the test
+# that has it.
+spring:
+  kafka:
+    listener:
+      auto-startup: false
+    admin:
+      auto-create: false
