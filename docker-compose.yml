@@ -31,6 +31,36 @@ services:
       retries: 20
       start_period: 10s
 
+  redpanda:
+    # Kafka-API compatible, one binary, no ZooKeeper and no JVM. On a laptop
+    # that is the difference between a broker that starts in two seconds and a
+    # three-container Kafka setup nobody runs twice.
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --default-log-level=warn
+      # Two listeners, because there are two kinds of client. Services on the
+      # compose network reach the broker as redpanda:9092; anything on the host
+      # -- rpk, a debugging console -- reaches it as localhost:19092. A broker
+      # advertises the address clients should dial back on, so getting this
+      # wrong produces the classic symptom: the connection succeeds, then every
+      # subsequent request goes to a hostname the client cannot resolve.
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.+true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   ledger:
     build:
       # Context is the repo root: the build needs the reactor pom and wrapper.
@@ -39,10 +69,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redpanda:
+        # Startup ordering only, exactly like Payments' dependency on the Ledger.
+        # The Ledger keeps accepting money movements with the broker down -- the
+        # events pile up in the outbox and the relay drains them when it comes
+        # back. That is the whole point of the outbox, and the chaos test relies
+        # on it being true.
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ledger
       SPRING_DATASOURCE_USERNAME: spademoney
       SPRING_DATASOURCE_PASSWORD: spademoney
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     ports:
       - "8080:8080"
     healthcheck:
