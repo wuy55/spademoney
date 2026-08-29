@@ -16,6 +16,21 @@ spring:
   flyway:
     enabled: true
 
+  # Layers an optional overrides file on top of everything below. The file does
+  # not exist in the packaged jar; it exists only on the TEST classpath.
+  #
+  # This is here because the obvious alternative is a trap. A file named
+  # application.yml under src/test/resources does not merge with this one, it
+  # REPLACES it -- same classpath resource name, test-classes first -- so every
+  # value here silently vanishes in tests. That is how a test asserting the HTTP
+  # timeouts ends up asserting a value the test's own config file supplied,
+  # proving nothing about the configuration that actually ships.
+  #
+  # An import keeps this file loaded and lets the test file override only what
+  # it needs to.
+  config:
+    import: "optional:classpath:/application-test-overrides.yml"
+
   kafka:
     # Overridden by compose to redpanda:9092.
     bootstrap-servers: localhost:19092
