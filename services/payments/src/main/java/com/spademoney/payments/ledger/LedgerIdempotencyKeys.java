@@ -5,42 +5,51 @@ package com.spademoney.payments.ledger;
  *
  * <h2>The caller's key is never forwarded</h2>
  * A client's {@code Idempotency-Key} names one operation in *Payments'* scope:
- * "this POST /payments". The key sent to the Ledger names a different
- * operation in the Ledger's scope: "this transfer". Forwarding the caller's key
- * verbatim conflates the two, and both directions are wrong:
+ * "this POST /payments". The keys sent to the Ledger name different operations
+ * in the Ledger's scope: "authorize this hold", "capture it". Forwarding the
+ * caller's key verbatim conflates them, and both directions are wrong:
  *
  * <ul>
- *   <li>One key would name two different operations in two services, so a
- *       replay of the payment and a replay of the transfer become
- *       indistinguishable.</li>
- *   <li>Once a payment is more than one Ledger call (Session 9: authorize, then
- *       capture), a single forwarded key would make the second step collide
- *       with the first inside one Ledger scope — 422 IDEMPOTENCY_KEY_REUSED,
- *       because the bodies differ.</li>
+ *   <li>One key would name two operations in two services, so a replay of the
+ *       payment and a replay of a step become indistinguishable.</li>
+ *   <li>A payment is three steps. A single forwarded key would make the second
+ *       step collide with the first inside one Ledger scope — same key,
+ *       different body, 422 IDEMPOTENCY_KEY_REUSED — and the saga would break
+ *       on step two, every time.</li>
  * </ul>
  *
- * <h2>This derivation is a placeholder and is knowingly wrong</h2>
- * {@code paymentId} is minted fresh on every request, so a client retrying the
- * same {@code Idempotency-Key} produces a *new* Ledger key and a *second*
- * transfer. Session 6 does not fix that: Payments has no idempotency store yet,
- * and inventing half of one here would be a worse foundation than an obviously
- * missing one.
+ * <h2>Deterministic, which is the whole point</h2>
+ * {@code saga:{sagaId}:{step}}. The saga id is allocated from the caller's
+ * Idempotency-Key through a UNIQUE constraint and persisted <em>before</em> the
+ * first step runs, so:
  *
- * Session 9 replaces this with {@code saga:{sagaId}:{step}}, where the saga id
- * is derived from the caller's key and persisted before the first step runs.
- * That makes the key deterministic across retries, which is what turns the
- * Ledger's idempotency contract into an actual exactly-once guarantee rather
- * than a decoration.
+ * <ul>
+ *   <li>a client retrying the same Idempotency-Key reaches the same saga, and
+ *       therefore sends the same step keys;</li>
+ *   <li>the driver retrying a step after a timeout sends the same key it sent
+ *       the first time.</li>
+ * </ul>
+ *
+ * Both cases become replays at the Ledger rather than second effects. That is
+ * what closes the double-charge window this class carried, and documented, from
+ * session 6 through session 8: the previous derivation minted a fresh UUID per
+ * request, so a retry produced a second transfer.
+ *
+ * It is also what makes a 504 recoverable. In session 6 a read timeout was
+ * unresolvable — Payments could not know whether the transfer posted and could
+ * not safely retry. With a stable key the question stops mattering: resend, and
+ * the Ledger either performs it or replays its own earlier answer.
  */
 public final class LedgerIdempotencyKeys {
-
-    /** The one Ledger step this service performs today. Becomes a saga step name in Session 9. */
-    private static final String TRANSFER_STEP = "ledger-transfer";
 
     private LedgerIdempotencyKeys() {
     }
 
-    public static String forTransfer(String paymentId) {
-        return "payment:%s:%s".formatted(paymentId, TRANSFER_STEP);
+    /**
+     * @param sagaId the persisted saga id, not a per-attempt value
+     * @param step   the step name, fixed by the saga plan
+     */
+    public static String forStep(String sagaId, String step) {
+        return "saga:%s:%s".formatted(sagaId, step);
     }
 }

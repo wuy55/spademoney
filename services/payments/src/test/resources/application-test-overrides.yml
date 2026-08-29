@@ -22,3 +22,15 @@ spring:
       auto-startup: false
     admin:
       auto-create: false
+
+spademoney:
+  saga:
+    # The driver's trigger is off. Tests call SagaDriver.runOnce() so they can
+    # assert on the state BETWEEN steps -- "the hold exists and the capture has
+    # not run yet" is the interesting state, and a background thread would race
+    # every assertion about it.
+    enabled: false
+    # No jitter window worth speaking of, so a retry scheduled by one tick is
+    # due by the next one and tests do not have to sleep through a backoff.
+    base-backoff: PT0.001S
+    max-backoff: PT0.005S

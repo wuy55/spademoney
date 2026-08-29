@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -22,6 +23,8 @@ import com.spademoney.payments.ledger.LedgerUnavailableException;
  * <pre>
  * 400 IDEMPOTENCY_KEY_REQUIRED  missing or blank Idempotency-Key
  * 400 VALIDATION_FAILED         body failed @Valid
+ * 400 MALFORMED_REQUEST        body could not be parsed at all
+ * 422 IDEMPOTENCY_KEY_REUSED    known key, different payment
  * 4xx (from the Ledger)         status and code passed through, with source: "ledger"
  * 502 LEDGER_UNAVAILABLE        Ledger unreachable or 5xx — the transfer did not happen
  * 504 LEDGER_TIMEOUT            no answer in time — whether it happened is unknown
@@ -37,8 +40,14 @@ import com.spademoney.payments.ledger.LedgerUnavailableException;
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
+    // Content-Type set explicitly. Spring infers it for a normal handler return,
+    // but an error response that arrives without one leaves a client guessing
+    // whether it can parse the body -- and a client parsing errors by guesswork
+    // is a client that will one day log a stack trace instead of a decline code.
     private static ResponseEntity<Map<String, String>> body(HttpStatusCode status, String code, String message) {
-        return ResponseEntity.status(status).body(Map.of("code", code, "message", message));
+        return ResponseEntity.status(status)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(Map.of("code", code, "message", message));
     }
 
     @ExceptionHandler(BlankIdempotencyKeyException.class)
@@ -56,6 +65,38 @@ public class ApiExceptionHandler {
     @ExceptionHandler(MissingRequestHeaderException.class)
     public ResponseEntity<Map<String, String>> onMissingHeader(MissingRequestHeaderException ex) {
         return body(HttpStatus.BAD_REQUEST, "IDEMPOTENCY_KEY_REQUIRED", ex.getMessage());
+    }
+
+    @ExceptionHandler(IdempotencyKeyReusedException.class)
+    public ResponseEntity<Map<String, String>> onKeyReuse(IdempotencyKeyReusedException ex) {
+        return body(HttpStatus.UNPROCESSABLE_ENTITY, "IDEMPOTENCY_KEY_REUSED", ex.getMessage());
+    }
+
+    /**
+     * The body could not be parsed into the request type at all, so no
+     * validation ever ran.
+     *
+     * <h2>Jackson 3 changed the default that makes this reachable</h2>
+     * {@code FAIL_ON_NULL_FOR_PRIMITIVES} is ON by default in Jackson 3 and was
+     * OFF in Jackson 2. A JSON body that simply omits {@code amountMinor} --
+     * declared as a primitive {@code long} -- therefore fails during
+     * deserialization rather than during {@code @Valid}, and never reaches the
+     * MethodArgumentNotValidException handler below.
+     *
+     * Without this handler that produced a bare 400 with an EMPTY body: no code,
+     * no message, nothing a client could branch on. And it fired on the single
+     * most likely client mistake there is, forgetting a field. Exactly the same
+     * hole as an unhandled missing header, arriving by a different route.
+     *
+     * The message is passed through rather than echoed verbatim from Jackson;
+     * the parser's own text names internal types and enum constants that are
+     * nobody else's business.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, String>> onUnreadableBody(HttpMessageNotReadableException ex) {
+        return body(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST",
+                "Request body could not be parsed; check that every field is present "
+                        + "and of the right type");
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -84,7 +125,9 @@ public class ApiExceptionHandler {
         payload.put("code", ex.error().code());
         payload.put("message", ex.error().message());
         payload.put("source", "ledger");
-        return ResponseEntity.status(ex.status()).body(payload);
+        return ResponseEntity.status(ex.status())
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(payload);
     }
 
     @ExceptionHandler(LedgerUnavailableException.class)

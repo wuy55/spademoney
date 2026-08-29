@@ -1,47 +1,37 @@
 package com.spademoney.payments.payment;
 
-import java.net.ConnectException;
-import java.net.SocketTimeoutException;
-import java.net.http.HttpConnectTimeoutException;
-
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.restclient.test.autoconfigure.AutoConfigureMockRestServiceServer;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 
 import com.spademoney.payments.TestcontainersConfiguration;
 
 import static org.hamcrest.Matchers.matchesPattern;
-import static org.hamcrest.Matchers.not;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The published contract of POST /payments, with the Ledger replaced by
- * MockRestServiceServer.
+ * The published contract of POST and GET /payments.
  *
- * No real Ledger is started. That is not a shortcut around an integration test —
- * it is the point. What needs proving in this module is the *translation*: that
- * each way the Ledger can answer becomes a distinct, correct answer from
- * Payments. A live Ledger would make the happy path easy and the interesting
- * cases (a 5xx, a read timeout) nearly impossible to provoke on demand. The
- * genuine end-to-end proof is the compose smoke test in Session 12.
+ * The saga driver's trigger is off in tests, so accepting a payment here writes
+ * a saga and nothing else — which is exactly the contract being asserted. Not
+ * one of these tests needs the Ledger, and the {@code MockRestServiceServer}
+ * is present only to make an accidental outbound call fail loudly rather than
+ * hit a real socket.
+ *
+ * What the saga then does with the payment is {@code PaymentSagaTest}.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -55,216 +45,184 @@ class PaymentApiTest {
 
     @Autowired
     private MockMvc mockMvc;
-
-    /** The stand-in Ledger. Reset between tests by Boot's test execution listener. */
     @Autowired
     private MockRestServiceServer ledger;
+    @Autowired
+    private JdbcClient jdbcClient;
 
-    @AfterEach
-    void everyExpectedLedgerCallWasMade() {
+    /**
+     * No expectations are registered anywhere in this class, and with
+     * MockRestServiceServer that is itself an assertion: any outbound call at
+     * all fails the test. Accepting a payment must touch nothing but this
+     * service's own database.
+     */
+    @org.junit.jupiter.api.AfterEach
+    void theLedgerWasNeverCalled() {
         ledger.verify();
     }
 
-    @Test
-    void aPaymentIsForwardedToTheLedgerAndItsTransactionIdReturned() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andExpect(method(HttpMethod.POST))
-                // Payments speaks payer/payee; the Ledger speaks from/to. The
-                // translation is asserted here because it is the only place it
-                // happens and nothing else would catch it being reversed.
-                .andExpect(jsonPath("$.fromAccountId").value(1))
-                .andExpect(jsonPath("$.toAccountId").value(2))
-                .andExpect(jsonPath("$.amountMinor").value(2500))
-                .andExpect(jsonPath("$.currency").value("USD"))
-                .andRespond(withStatus(HttpStatus.CREATED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body("""
-                                {"transactionId":42,"status":"POSTED"}
-                                """));
-
-        mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isCreated())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.ledgerTransactionId").value(42))
-                .andExpect(MockMvcResultMatchers.jsonPath("$.status").value("POSTED"))
-                .andExpect(MockMvcResultMatchers.jsonPath("$.paymentId").isNotEmpty())
-                // No Location header: there is no GET /payments/{id} to point at,
-                // and a Location that 404s is a documented lie.
-                .andExpect(MockMvcResultMatchers.header().doesNotExist("Location"));
+    @BeforeEach
+    void reset() {
+        jdbcClient.sql("TRUNCATE sagas, saga_steps, limit_consumptions, payment_limits CASCADE").update();
     }
 
     /**
-     * The single most important assertion in this class.
+     * 202, not 201, and a Location header that resolves.
      *
-     * The caller's key names an operation in Payments' scope; the key sent to
-     * the Ledger names an operation in the Ledger's. Forwarding the caller's key
-     * verbatim is the easy mistake, it looks correct in a happy-path test, and
-     * it breaks the moment one payment becomes two Ledger calls.
+     * Sessions 6-8 shipped a 201 with deliberately NO Location, because the
+     * obvious /payments/{id} would have pointed at a 404. The saga is the
+     * resource that was missing, so the header arrives with the thing it names.
      */
     @Test
-    void theCallersIdempotencyKeyIsNeverForwardedToTheLedger() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andExpect(header("Idempotency-Key", not("caller-key-1")))
-                .andExpect(header("Idempotency-Key", matchesPattern("payment:[0-9a-f-]{36}:ledger-transfer")))
-                .andRespond(withStatus(HttpStatus.CREATED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body("""
-                                {"transactionId":42,"status":"POSTED"}
-                                """));
+    void anAcceptedPaymentAnswers202WithALocationThatResolves() throws Exception {
+        String location = mockMvc.perform(post("/payments")
+                        .header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.paymentId").value(matchesPattern(
+                        "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
+                .andExpect(header().exists("Location"))
+                .andReturn().getResponse().getHeader("Location");
 
-        mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isCreated());
+        mockMvc.perform(get(location))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sagaStatus").value("RUNNING"))
+                .andExpect(jsonPath("$.amountMinor").value(2500));
     }
 
     /**
-     * A request Payments can reject on its own must never reach the Ledger.
-     * With no expectation registered, any outbound call fails this test — which
-     * is exactly the assertion wanted.
+     * Case 2 of the four-case contract: a replay returns the same payment and
+     * creates no second one.
      */
     @Test
-    void anInvalidBodyIsRejectedWithoutCallingTheLedger() throws Exception {
-        mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                        {"payerAccountId":1,"payeeAccountId":2,"amountMinor":-5,"currency":"USD"}
-                        """))
-                .andExpect(status().isBadRequest())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("VALIDATION_FAILED"));
-    }
+    void replayingTheSameKeyWithTheSameBodyReturnsTheSamePayment() throws Exception {
+        String first = paymentIdFrom(BODY, "key-replay");
+        String second = paymentIdFrom(BODY, "key-replay");
 
-    @Test
-    void aMissingIdempotencyKeyIsRejectedWithoutCallingTheLedger() throws Exception {
-        mockMvc.perform(post("/payments")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isBadRequest())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("IDEMPOTENCY_KEY_REQUIRED"));
-    }
-
-    @Test
-    void aBlankIdempotencyKeyIsRejectedWithoutCallingTheLedger() throws Exception {
-        mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "   ")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isBadRequest())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("IDEMPOTENCY_KEY_REQUIRED"));
+        org.assertj.core.api.Assertions.assertThat(second).isEqualTo(first);
+        org.assertj.core.api.Assertions.assertThat(sagaCount()).isEqualTo(1);
     }
 
     /**
-     * A 4xx from the Ledger is information, not a transport failure: the money
-     * definitively did not move and the reason has a name. Both survive the hop.
+     * Case 3: a key reused for a DIFFERENT payment is a client bug and is
+     * reported, not absorbed. Absorbing it would answer with the first payment's
+     * status for a request describing a different one.
      */
     @Test
-    void aLedgerRejectionKeepsItsStatusAndErrorCode() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_CONTENT)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body("""
-                                {"code":"INSUFFICIENT_FUNDS","message":"available balance 100 < 2500"}
-                                """));
+    void reusingAKeyForADifferentPaymentIs422() throws Exception {
+        mockMvc.perform(post("/payments")
+                .header("Idempotency-Key", "key-reuse")
+                .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isAccepted());
 
         mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
+                        .header("Idempotency-Key", "key-reuse")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"payerAccountId":1,"payeeAccountId":2,"amountMinor":9900,"currency":"USD"}
+                                """))
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("INSUFFICIENT_FUNDS"))
-                // Distinguishes a rejection Payments relayed from one it made
-                // itself -- which starts mattering with Session 9's limit check.
-                .andExpect(MockMvcResultMatchers.jsonPath("$.source").value("ledger"));
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+        org.assertj.core.api.Assertions.assertThat(sagaCount()).isEqualTo(1);
+    }
+
+    @Test
+    void anInvalidBodyIsRejectedAndNoSagaIsWritten() throws Exception {
+        mockMvc.perform(post("/payments")
+                        .header("Idempotency-Key", "key-invalid")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"payerAccountId":1,"payeeAccountId":2,"amountMinor":-1,"currency":"USD"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        org.assertj.core.api.Assertions.assertThat(sagaCount()).isZero();
+    }
+
+    @Test
+    void aMissingIdempotencyKeyIsRejectedWithAMachineReadableCode() throws Exception {
+        mockMvc.perform(post("/payments")
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REQUIRED"));
+    }
+
+    @Test
+    void aBlankIdempotencyKeyIsRejected() throws Exception {
+        mockMvc.perform(post("/payments")
+                        .header("Idempotency-Key", "   ")
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REQUIRED"));
     }
 
     /**
-     * A 5xx says the request was not processed, so the money did not move and a
-     * retry is safe. 502, not 504 -- the difference is the whole point.
+     * A malformed id and an unknown id both answer 404. The distinction a caller
+     * can act on is "no such payment"; whether the id was the wrong shape or
+     * merely unknown is not their problem, and a 400 here would invite clients
+     * to branch on it.
      */
     @Test
-    void aLedgerServerErrorBecomes502() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andRespond(withServerError());
-
-        mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isBadGateway())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("LEDGER_UNAVAILABLE"));
+    void unknownPaymentIdsAre404WhateverShapeTheyAre() throws Exception {
+        mockMvc.perform(get("/payments/not-a-uuid")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/payments/8a1a3b4c-0000-0000-0000-000000000000"))
+                .andExpect(status().isNotFound());
     }
 
     /**
-     * An unreachable Ledger is 502, not 504 — and this test exists because the
-     * first version of the client got it wrong.
+     * A body missing a numeric field.
      *
-     * HttpConnectTimeoutException extends HttpTimeoutException, so a cause-chain
-     * check written in the obvious order classifies "never connected" as
-     * "connected, then silence". The bug was invisible to every test here and
-     * showed up only against a stopped container: a 504 arriving after exactly
-     * the 2s connect timeout, reporting an unknown outcome for a request that
-     * provably never left the process.
-     *
-     * The distinction is not pedantry. 502 means a retry is safe; 504 means a
-     * retry may double-charge. Getting it backwards makes the safe case
-     * unretryable and, worse, makes 504 mean nothing in particular.
+     * Worth its own test because of where it fails. {@code amountMinor} is a
+     * primitive {@code long}, and Jackson 3 turns ON FAIL_ON_NULL_FOR_PRIMITIVES
+     * -- which Jackson 2 had off -- so an omitted field breaks during
+     * deserialization, before @Valid ever runs. It arrives as
+     * HttpMessageNotReadableException, not MethodArgumentNotValidException, and
+     * until that was handled it produced a 400 with a completely empty body: no
+     * code, no message, on the most common client mistake there is.
      */
     @Test
-    void aLedgerThatCannotBeConnectedToBecomes502NotAnAmbiguous504() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andRespond(withException(new HttpConnectTimeoutException("HTTP connect timed out")));
-
+    void aBodyMissingANumericFieldStillGetsAMachineReadableError() throws Exception {
         mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isBadGateway())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("LEDGER_UNAVAILABLE"));
+                        .header("Idempotency-Key", "key-missing-field")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"payerAccountId":1,"payeeAccountId":2,"currency":"USD"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST"));
+
+        org.assertj.core.api.Assertions.assertThat(sagaCount()).isZero();
     }
 
-    /** A refused connection says the same thing as a connect timeout: not processed. */
     @Test
-    void aRefusedConnectionBecomes502() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andRespond(withException(new ConnectException("Connection refused")));
-
+    void theErrorEnvelopeMatchesTheLedgersSoOneParserHandlesBoth() throws Exception {
         mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isBadGateway())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("LEDGER_UNAVAILABLE"));
+                        .header("Idempotency-Key", "key-envelope")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"payerAccountId":1,"payeeAccountId":2,"amountMinor":-1,"currency":""}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").exists())
+                .andExpect(jsonPath("$.message").exists());
     }
 
-    /**
-     * The deliberately unresolved case (session brief section 9).
-     *
-     * The read timeout fires and Payments does not know whether the transfer
-     * posted. It answers 504 and stops: no retry, no status lookup, no
-     * reconciliation shortcut. Every one of those would be a guess dressed as a
-     * fix, and each would have to be torn out again once the outbox (Session 7),
-     * the inbox (Session 8) and the deterministic saga key (Session 9) make the
-     * operation genuinely recoverable.
-     *
-     * This test pins the honest behaviour so nobody "improves" it by accident.
-     */
-    @Test
-    void aLedgerReadTimeoutBecomes504AndIsNotRetried() throws Exception {
-        ledger.expect(requestTo("http://localhost:8080/transfers"))
-                .andRespond(withException(new SocketTimeoutException("Read timed out")));
+    private String paymentIdFrom(String body, String key) throws Exception {
+        String json = mockMvc.perform(post("/payments")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse().getContentAsString();
+        return new tools.jackson.databind.ObjectMapper().readTree(json).get("paymentId").asString();
+    }
 
-        mockMvc.perform(post("/payments")
-                .header("Idempotency-Key", "caller-key-1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY))
-                .andExpect(status().isGatewayTimeout())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.code").value("LEDGER_TIMEOUT"));
-
-        // Exactly one outbound call. ledger.verify() in @AfterEach would fail if
-        // a retry had fired a second request against a server expecting one.
+    private long sagaCount() {
+        return jdbcClient.sql("SELECT count(*) FROM sagas").query(Long.class).single();
     }
 }

@@ -100,3 +100,22 @@ spademoney:
     # The Ledger publishes here; Payments only reads. The name is the Ledger's
     # to choose, which is why it is configuration rather than a constant.
     events-topic: spademoney.ledger.events
+
+  saga:
+    # The driver's trigger. The bean exists either way, so tests advance a saga
+    # one step at a time instead of racing a background thread.
+    enabled: true
+    # Also the latency of a payment's first step: there is no synchronous start
+    # path, deliberately, so that recovery and the happy path are the same code.
+    interval: PT0.25S
+    batch-size: 20
+    # Comfortably longer than one step's worst case (the 5s ledger read timeout),
+    # so an in-flight step is never double-driven under normal operation. It is a
+    # safety net for a crashed driver, not part of ordinary flow.
+    lease: PT30S
+    max-attempts: 5
+    base-backoff: PT0.2S
+    max-backoff: PT10S
+    # Must outlast the whole retry schedule with room to spare: a hold that
+    # lapses mid-saga fails the capture for a reason nothing in Payments did.
+    hold-expiry: PT10M
