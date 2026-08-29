@@ -7,9 +7,12 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 /**
  * The Payments (orchestrator) service.
  *
- * Today it is a proxy: POST /payments validates, then forwards one transfer to
- * the Ledger over HTTP. It owns no money and holds no ledger state — the Ledger
- * remains the sole authority on balances (ADR-002).
+ * It accepts a payment, writes down a saga, and drives that saga to a terminal
+ * state: authorize a hold in the Ledger, consume the payer's local spending cap,
+ * capture the hold — compensating in reverse if any of it fails. It owns no
+ * money and holds no ledger state; the Ledger remains the sole authority on
+ * balances (ADR-002). The only thing it owns outright is the cap, which is
+ * precisely why the saga needs a compensation at all.
  *
  * It exists now, ahead of doing anything interesting, because the seam is the
  * artifact: two processes, two databases, no shared code, and therefore no
