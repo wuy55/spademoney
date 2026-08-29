@@ -1,0 +1,35 @@
+# Test-only overrides, layered on top of src/main/resources/application.yml via
+# the spring.config.import declared there. Only differences belong here -- the
+# real configuration is still the one that ships.
+#
+# Both background TRIGGERS are off, for the same reason in both cases: the bean
+# stays present and the test drives it explicitly, so an assertion about the
+# state between ticks is a fact rather than a race.
+#
+#   - The sweeper: expiry correctness comes from the `expires_at > now()`
+#     predicate, not from the job, so the tests that prove it need a lapsed hold
+#     sitting there still marked ACTIVE. HoldExpirySweeperTest drives it.
+#   - The outbox relay: the assertions that prove an event committed WITH the
+#     money look at unpublished outbox rows. A background thread draining them
+#     mid-test would make exactly those assertions flaky. OutboxRelayTest drives
+#     drainOnce() directly.
+#
+# The datasource is not restated: Testcontainers supplies it through
+# @ServiceConnection, and connection details take precedence over properties.
+spademoney:
+  holds:
+    sweeper:
+      enabled: false
+  outbox:
+    relay:
+      enabled: false
+
+spring:
+  kafka:
+    admin:
+      # With no broker running, KafkaAdmin logs a full stack trace on every
+      # context start. That is noise about a non-problem here, since the relay's
+      # trigger is off and nothing tries to publish.
+      # OutboxRelayIntegrationTest turns it back on, next to the Redpanda
+      # container that makes it meaningful.
+      auto-create: false
