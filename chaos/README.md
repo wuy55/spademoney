@@ -35,11 +35,16 @@ What they exercise is the deployment, not the code. That is why they live here.
 
 1. Seeds a known ledger state, so every number it later asserts is derivable
    from `seed-ledger.sql` rather than from whatever was left over.
-2. Fires N payments concurrently and lets them get into flight. Some will have
-   taken their hold, some will not, some will be mid-capture. That spread is
-   the point — killing a system between two known steps proves much less than
-   killing it across all of them at once. The script checks that the kill
-   really did straddle the first step, and says so if it did not.
+2. Fires N payments concurrently and then **polls for the kill moment** rather
+   than sleeping to it: it kills as soon as at least one hold exists and not
+   every payment has captured. That is the definition of "mid-saga", and it is
+   deterministic on any machine instead of tuned to one.
+
+   The first version slept a fixed 1.5s. On a fast machine every saga had
+   already finished, so the chaos test killed an idle service and asserted that
+   nothing had gone wrong — true, and proof of nothing. The script noticed,
+   because it checks and reports the state at the moment of the kill. That check
+   is worth more than the sleep it replaced.
 3. `docker kill` on the Ledger. SIGKILL, not `stop`: no graceful shutdown, no
    chance to finish an in-flight request or flush anything. A service that only
    survives being asked politely to leave has not been tested.
@@ -76,6 +81,26 @@ The capture-count assertion is the one to watch. If the deterministic step key
 were wrong — if a retry sent a fresh key, as it did before the saga existed —
 this is the line that would fail, and the payee balance would be wrong by the
 same amount.
+
+## Two runs worth doing
+
+```bash
+./chaos/chaos-test.sh --no-build              # short outage: full recovery
+./chaos/chaos-test.sh --no-build --outage 75  # long outage: declines and compensation
+```
+
+Observed on a laptop, both passing every assertion:
+
+| Run | at the kill | outcome | ledger net |
+|---|---|---|---|
+| 8s outage | 12 in flight, 11 holds, 2 captured | 12 completed | 0 |
+| 75s outage | 10 in flight, 11 holds, 2 captured | 8 completed, 4 compensated | 0 |
+
+The second is the more interesting one. Four payments outlived the forward retry
+budget, were declined, and had their holds voided and their spending caps
+released once the Ledger returned — captures matched completions exactly, and no
+hold was left reserving funds. That is the compensation path running against a
+real outage rather than a scripted 422.
 
 ## Why an ordinary run still shows compensations
 

@@ -38,7 +38,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PAYMENT_COUNT=12
 OUTAGE_SECONDS=8
-KILL_AFTER=1.5
+# Upper bound on how long to wait for the fleet to reach a mid-saga state before
+# killing anyway. Not the kill delay -- see the poll below.
+KILL_DEADLINE=15
 AMOUNT=2500
 BUILD=1
 RUN_ID="chaos-$(date +%s)"
@@ -76,23 +78,43 @@ for i in $(seq 1 "$PAYMENT_COUNT"); do
             -d "{\"payerAccountId\":2,\"payeeAccountId\":3,\"amountMinor\":$AMOUNT,\"currency\":\"USD\"}" 2>/dev/null)" || exit 0
         printf '%s\n' "$(printf '%s' "$response" | json paymentId)" >> "$IDS_FILE"
     ) &
-    sleep 0.1
+    sleep 0.05
 done
 wait
 ACCEPTED="$(wc -l < "$IDS_FILE" | tr -d ' ')"
 ok "$ACCEPTED payment(s) accepted"
 
 step "Killing the Ledger mid-saga"
-sleep "$KILL_AFTER"
+# The kill moment is polled for, not slept to.
+#
+# The first version of this script slept a fixed 1.5s and then killed. On a fast
+# machine every saga had already finished, so the "chaos test" killed an idle
+# service and asserted that nothing had gone wrong -- which was true and proved
+# nothing. The script noticed, because it checks, and the check is the reason
+# this is now a poll.
+#
+# The condition below is the definition of "mid-saga": at least one hold exists,
+# so work has genuinely started, and not every payment has captured, so there is
+# still something in flight to interrupt. Killing on that is deterministic on any
+# machine instead of tuned to one.
+kill_deadline=$((SECONDS + KILL_DEADLINE))
+while [ "$SECONDS" -lt "$kill_deadline" ]; do
+    holds_taken="$(psql_ledger "SELECT count(*) FROM holds")"
+    captured="$(psql_ledger "SELECT count(*) FROM transactions WHERE type = 'CAPTURE'")"
+    if [ "$holds_taken" -gt 0 ] && [ "$captured" -lt "$ACCEPTED" ]; then
+        break
+    fi
+    sleep 0.05
+done
+
 in_flight="$(psql_payments "SELECT count(*) FROM sagas WHERE status IN ('RUNNING','COMPENSATING')")"
-holds_taken="$(psql_ledger "SELECT count(*) FROM holds")"
-say "        at the moment of the kill: $in_flight saga(s) in flight, $holds_taken hold(s) already placed"
-if [ "$in_flight" -gt 0 ] && [ "$holds_taken" -gt 0 ] && [ "$holds_taken" -lt "$ACCEPTED" ]; then
-    ok "the kill lands mid-flight, with sagas on both sides of their first step"
+say "        at the moment of the kill: $in_flight saga(s) in flight, $holds_taken hold(s) placed, $captured captured"
+if [ "$in_flight" -gt 0 ] && [ "$holds_taken" -gt 0 ] && [ "$captured" -lt "$ACCEPTED" ]; then
+    ok "the kill lands mid-saga, with payments on both sides of the capture"
 else
     # Not a failure of the SYSTEM -- a failure of the experiment to be
     # interesting. Say so plainly rather than quietly asserting something weaker.
-    warn "the kill did not straddle the first step (in flight: $in_flight, holds: $holds_taken of $ACCEPTED)"
+    warn "the kill did not land mid-saga (in flight: $in_flight, holds: $holds_taken, captured: $captured of $ACCEPTED)"
 fi
 
 # SIGKILL. No graceful shutdown, no chance to finish an in-flight request.

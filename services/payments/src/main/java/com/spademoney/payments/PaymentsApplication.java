@@ -3,6 +3,7 @@ package com.spademoney.payments;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * The Payments (orchestrator) service.
@@ -22,6 +23,11 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
+// Without this the saga driver's @Scheduled trigger is never registered and
+// every payment sits in RUNNING forever. Nothing in the unit suite can catch
+// that, because those tests call SagaDriver.runOnce() themselves --
+// SchedulingIsWiredTest exists specifically to close that gap.
+@EnableScheduling
 public class PaymentsApplication {
 
 	public static void main(String[] args) {
