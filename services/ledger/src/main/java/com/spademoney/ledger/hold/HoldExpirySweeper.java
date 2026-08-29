@@ -1,11 +1,16 @@
 package com.spademoney.ledger.hold;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+
+import com.spademoney.ledger.outbox.LedgerEvents;
+import com.spademoney.ledger.outbox.OutboxWriter;
 
 /**
  * Relabels lapsed authorizations ACTIVE -> EXPIRED.
@@ -43,24 +48,48 @@ public class HoldExpirySweeper {
                     LIMIT ?
                       FOR UPDATE SKIP LOCKED
              )
+            RETURNING id
             """;
 
     private final JdbcClient jdbcClient;
+    private final OutboxWriter outbox;
     private final int batchSize;
 
-    public HoldExpirySweeper(JdbcClient jdbcClient,
+    public HoldExpirySweeper(JdbcClient jdbcClient, OutboxWriter outbox,
             @Value("${spademoney.holds.sweeper.batch-size:500}") int batchSize) {
         this.jdbcClient = jdbcClient;
+        this.outbox = outbox;
         this.batchSize = batchSize;
     }
 
-    /** @return how many holds were relabelled. */
+    /**
+     * @return how many holds were relabelled.
+     *
+     * The UPDATE now RETURNs the ids so each expiry can be announced. The event
+     * is appended in this same transaction, which keeps the usual guarantee --
+     * no HoldExpired is published for a row that did not flip.
+     *
+     * Note the asymmetry with the rest of the ledger, and that it is honest: the
+     * funds stopped being reserved when the deadline passed, not when this job
+     * ran, so HoldExpired reports a bookkeeping change and not a change in any
+     * balance. A saga waiting on a hold still needs to hear it, which is why it
+     * is published at all.
+     */
     @Transactional
     public int sweepExpiredHolds() {
-        int expired = jdbcClient.sql(SWEEP_SQL).param(batchSize).update();
-        if (expired > 0) {
-            log.info("Expired {} lapsed hold(s)", expired);
+        List<Long> expiredIds = jdbcClient.sql(SWEEP_SQL)
+                .param(batchSize)
+                .query(Long.class)
+                .list();
+
+        for (Long holdId : expiredIds) {
+            outbox.append(OutboxWriter.AGGREGATE_HOLD, holdId, LedgerEvents.HOLD_EXPIRED,
+                    new LedgerEvents.HoldExpired(holdId));
         }
-        return expired;
+
+        if (!expiredIds.isEmpty()) {
+            log.info("Expired {} lapsed hold(s)", expiredIds.size());
+        }
+        return expiredIds.size();
     }
 }
