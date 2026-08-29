@@ -34,3 +34,8 @@ spademoney:
     # due by the next one and tests do not have to sleep through a backoff.
     base-backoff: PT0.001S
     max-backoff: PT0.005S
+  reconciliation:
+    # Driven directly by its test. A background run making HTTP calls to a
+    # MockRestServiceServer that a test is mid-way through scripting would fail
+    # unrelated assertions in ways that look like flakes.
+    enabled: false

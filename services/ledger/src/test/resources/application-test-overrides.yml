@@ -23,6 +23,11 @@ spademoney:
   outbox:
     relay:
       enabled: false
+  reconciliation:
+    # Same reasoning again: the service is driven directly by
+    # LedgerReconciliationTest, and a background run scanning the tables while a
+    # test truncates them is a source of noise, not of signal.
+    enabled: false
 
 spring:
   kafka:

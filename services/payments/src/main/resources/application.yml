@@ -101,6 +101,17 @@ spademoney:
     # to choose, which is why it is configuration rather than a constant.
     events-topic: spademoney.ledger.events
 
+  reconciliation:
+    enabled: true
+    interval: PT1M
+    # How long a saga may sit without advancing before it counts as stuck. Must
+    # exceed the driver's whole retry schedule, or a payment legitimately backing
+    # off would be reported as stuck every time the Ledger hiccuped.
+    stuck-after: PT2M
+    # The cross-service checks make one HTTP call per sampled saga, so the sample
+    # is bounded: an unbounded diagnostic is an outage waiting for a busy day.
+    remote-sample: 50
+
   saga:
     # The driver's trigger. The bean exists either way, so tests advance a saga
     # one step at a time instead of racing a background thread.

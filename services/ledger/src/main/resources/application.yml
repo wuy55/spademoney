@@ -67,6 +67,17 @@ management:
         enabled: true
 
 spademoney:
+  reconciliation:
+    # The trigger. The service is always a bean, so tests and the chaos script
+    # ask for a report directly.
+    enabled: true
+    interval: PT1M
+    # Grace periods, so the checks catch a STOPPED sweeper or relay rather than
+    # one that is merely mid-tick. Without them both checks would be permanent
+    # noise, and a check nobody believes is worse than no check.
+    sweeper-grace: PT2M
+    relay-grace: PT1M
+
   outbox:
     relay:
       # The trigger. The relay bean exists either way, so tests drive it a tick
