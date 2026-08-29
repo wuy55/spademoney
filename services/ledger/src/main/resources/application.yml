@@ -16,6 +16,28 @@ spring:
   flyway:
     enabled: true
 
+  kafka:
+    # Overridden by compose to redpanda:9092.
+    bootstrap-servers: localhost:19092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # acks=all: the leader answers only once every in-sync replica has the
+      # record. With acks=1 a leader failover right after the ack loses an
+      # acknowledged event -- and the relay would already have marked it
+      # published, so it would never be sent again. That is exactly the silent
+      # loss the outbox exists to prevent, reintroduced one config line lower.
+      acks: all
+      properties:
+        # The producer's own dedupe: a retried send that the broker already
+        # wrote is recognised by sequence number instead of appended twice.
+        # This removes duplicates caused by producer retries; it does NOT make
+        # the pipeline exactly-once, because the relay can still crash between
+        # the ack and the published_at update. That remaining duplicate is the
+        # consumer's inbox's problem, by design.
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+
 management:
   endpoints:
     web:
@@ -30,6 +52,16 @@ management:
         enabled: true
 
 spademoney:
+  outbox:
+    relay:
+      # The trigger. The relay bean exists either way, so tests drive it a tick
+      # at a time instead of racing a background thread.
+      enabled: true
+      interval: PT1S
+      batch-size: 100
+      topic: spademoney.ledger.events
+      send-timeout: 10s
+
   holds:
     sweeper:
       # Housekeeping only -- correctness comes from the expires_at predicate,
