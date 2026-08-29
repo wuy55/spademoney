@@ -5,6 +5,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.spademoney.ledger.money.Money;
+import com.spademoney.ledger.outbox.LedgerEvents;
+import com.spademoney.ledger.outbox.OutboxWriter;
 import com.spademoney.ledger.query.AccountBalances;
 
 /**
@@ -23,6 +25,11 @@ import com.spademoney.ledger.query.AccountBalances;
  * taken BEFORE the balance read so no one can post an entry in the gap between
  * reading a balance and inserting against it; that gap is where double-spend
  * lives.
+ *
+ * Since M3 every money movement also writes its outbox event here, inside the
+ * same transaction. That is not a notification bolted onto the end -- it is the
+ * only placement under which the event and the entries cannot disagree. See
+ * {@link OutboxWriter}.
  */
 @Service
 public class LedgerTransactionService {
@@ -32,12 +39,24 @@ public class LedgerTransactionService {
 
     private final JdbcClient jdbcClient;
     private final AccountBalances balances;
+    private final OutboxWriter outbox;
 
-    public LedgerTransactionService(JdbcClient jdbcClient, AccountBalances balances) {
+    public LedgerTransactionService(JdbcClient jdbcClient, AccountBalances balances, OutboxWriter outbox) {
         this.jdbcClient = jdbcClient;
         this.balances = balances;
+        this.outbox = outbox;
     }
 
+    /**
+     * The transfer, and the announcement of the transfer, in one transaction.
+     *
+     * The outbox append is the last statement rather than the first only for
+     * readability -- within one transaction there is no ordering to exploit. What
+     * matters is that there is no commit between the entries and the event, so
+     * the two outcomes are: both, or neither. Any arrangement that publishes
+     * outside this method has a third outcome, and that third outcome is a
+     * consumer told about money that never moved.
+     */
     @Transactional
     public Long transfer(Long fromAccountId, Long toAccountId, Money amount) {
         lockBothAscending(fromAccountId, toAccountId, amount.currency().getCurrencyCode());
@@ -49,6 +68,11 @@ public class LedgerTransactionService {
 
         Long transactionId = createTransaction("TRANSFER", null);
         postDoubleEntry(transactionId, fromAccountId, toAccountId, amount);
+
+        outbox.append(OutboxWriter.AGGREGATE_TRANSACTION, transactionId, LedgerEvents.TRANSFER_POSTED,
+                new LedgerEvents.TransferPosted(transactionId, fromAccountId, toAccountId,
+                        amount.amountMinor(), amount.currency().getCurrencyCode()));
+
         return transactionId;
     }
 

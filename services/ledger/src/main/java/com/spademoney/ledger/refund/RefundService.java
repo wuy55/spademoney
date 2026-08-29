@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.spademoney.ledger.money.Money;
+import com.spademoney.ledger.outbox.LedgerEvents;
+import com.spademoney.ledger.outbox.OutboxWriter;
 import com.spademoney.ledger.query.AccountBalances;
 import com.spademoney.ledger.service.InsufficientFundsException;
 import com.spademoney.ledger.service.LedgerTransactionService;
@@ -49,11 +51,14 @@ public class RefundService {
     private final JdbcClient jdbcClient;
     private final AccountBalances balances;
     private final LedgerTransactionService ledger;
+    private final OutboxWriter outbox;
 
-    public RefundService(JdbcClient jdbcClient, AccountBalances balances, LedgerTransactionService ledger) {
+    public RefundService(JdbcClient jdbcClient, AccountBalances balances, LedgerTransactionService ledger,
+            OutboxWriter outbox) {
         this.jdbcClient = jdbcClient;
         this.balances = balances;
         this.ledger = ledger;
+        this.outbox = outbox;
     }
 
     @Transactional
@@ -133,6 +138,9 @@ public class RefundService {
         Long refundTransactionId = ledger.createTransaction("REFUND", originalId);
         Money amount = Money.of(amountMinor, Currency.getInstance(currency));
         ledger.postDoubleEntry(refundTransactionId, originalPayee, originalPayer, amount);
+
+        outbox.append(OutboxWriter.AGGREGATE_TRANSACTION, refundTransactionId, LedgerEvents.REFUND_POSTED,
+                new LedgerEvents.RefundPosted(refundTransactionId, originalId, amountMinor, currency));
 
         return new RefundResponse(refundTransactionId, originalId, amountMinor, currency,
                 refundedAfter, originalAmount - refundedAfter);

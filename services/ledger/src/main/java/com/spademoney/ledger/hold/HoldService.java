@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.spademoney.ledger.money.Money;
+import com.spademoney.ledger.outbox.LedgerEvents;
+import com.spademoney.ledger.outbox.OutboxWriter;
 import com.spademoney.ledger.query.AccountBalances;
 import com.spademoney.ledger.service.AccountNotFoundInLedgerException;
 import com.spademoney.ledger.service.CurrencyMismatchException;
@@ -40,11 +42,14 @@ public class HoldService {
     private final JdbcClient jdbcClient;
     private final AccountBalances balances;
     private final LedgerTransactionService ledger;
+    private final OutboxWriter outbox;
 
-    public HoldService(JdbcClient jdbcClient, AccountBalances balances, LedgerTransactionService ledger) {
+    public HoldService(JdbcClient jdbcClient, AccountBalances balances, LedgerTransactionService ledger,
+            OutboxWriter outbox) {
         this.jdbcClient = jdbcClient;
         this.balances = balances;
         this.ledger = ledger;
+        this.outbox = outbox;
     }
 
     /**
@@ -105,7 +110,7 @@ public class HoldService {
         // machines' clocks decide when an authorization lapses, so a few seconds
         // of drift would silently lengthen or shorten every hold. One clock owns
         // the whole comparison.
-        return jdbcClient.sql("""
+        HoldResponse hold = jdbcClient.sql("""
                 INSERT INTO holds(account_id, payee_account_id, amount_minor, currency, expires_at)
                 VALUES (?, ?, ?, ?, now() + (?::bigint * interval '1 second'))
                 RETURNING id, account_id, payee_account_id, amount_minor, currency, status, expires_at
@@ -114,6 +119,14 @@ public class HoldService {
                         request.amountMinor(), request.currency(), expiry.toSeconds())
                 .query(HoldService::mapHold)
                 .single();
+
+        // Same transaction as the INSERT above: a saga that hears HoldAuthorized
+        // can rely on the hold existing, because there is no commit in between.
+        outbox.append(OutboxWriter.AGGREGATE_HOLD, hold.holdId(), LedgerEvents.HOLD_AUTHORIZED,
+                new LedgerEvents.HoldAuthorized(hold.holdId(), hold.accountId(), hold.payeeAccountId(),
+                        hold.amountMinor(), hold.currency(), hold.expiresAt()));
+
+        return hold;
     }
 
     /**
@@ -173,8 +186,18 @@ public class HoldService {
         Money amount = Money.of(amountMinor, Currency.getInstance(hold.currency()));
         ledger.postDoubleEntry(transactionId, hold.accountId(), hold.payeeAccountId(), amount);
 
+        long releasedMinor = hold.amountMinor() - amountMinor;
+
+        // Keyed on the HOLD, not on the capture's transaction. A saga follows a
+        // hold through authorize -> capture, and those two events must land on
+        // the same partition to arrive in that order; keying the capture on its
+        // own fresh transaction id would scatter them.
+        outbox.append(OutboxWriter.AGGREGATE_HOLD, hold.holdId(), LedgerEvents.HOLD_CAPTURED,
+                new LedgerEvents.HoldCaptured(hold.holdId(), transactionId, hold.accountId(),
+                        hold.payeeAccountId(), amountMinor, releasedMinor, hold.currency()));
+
         return new CaptureResponse(hold.holdId(), transactionId, amountMinor,
-                hold.amountMinor() - amountMinor, hold.currency(), hold.status());
+                releasedMinor, hold.currency(), hold.status());
     }
 
     /**
@@ -223,7 +246,11 @@ public class HoldService {
                 .optional();
 
         if (updated.isPresent()) {
-            return updated.get();
+            HoldResponse hold = updated.get();
+            outbox.append(OutboxWriter.AGGREGATE_HOLD, hold.holdId(), LedgerEvents.HOLD_VOIDED,
+                    new LedgerEvents.HoldVoided(hold.holdId(), hold.accountId(),
+                            hold.amountMinor(), hold.currency()));
+            return hold;
         }
 
         // Rowcount 0 means either no such hold, or it is no longer ACTIVE.
