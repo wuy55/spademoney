@@ -129,5 +129,37 @@ services:
       retries: 20
       start_period: 30s
 
+  seed:
+    # Makes `docker compose up` produce a system you can immediately curl,
+    # rather than one with an empty ledger and no accounts to pay between.
+    #
+    # A one-shot container, not a long-running service: it seeds and exits 0.
+    # `compose up` will show it as "exited (0)", which is success, not a crash.
+    #
+    # It waits on the two APPLICATIONS being healthy, not just Postgres, and that
+    # ordering is the whole reason this is a separate service instead of another
+    # file in docker-entrypoint-initdb.d. Those init scripts run before either
+    # service has ever started, so the tables do not exist yet -- Flyway creates
+    # them. Seeding has to happen after the migrations, which means after the
+    # apps are up.
+    image: postgres:16
+    depends_on:
+      ledger:
+        condition: service_healthy
+      payments:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: spademoney
+    volumes:
+      - ./docker/seed:/seed:ro
+    # ON_ERROR_STOP so a broken seed fails loudly instead of leaving a
+    # half-seeded ledger that looks fine until someone tries to pay from it.
+    command: >
+      bash -c "
+        psql -h postgres -U spademoney -d ledger   -v ON_ERROR_STOP=1 -f /seed/01-ledger.sql &&
+        psql -h postgres -U spademoney -d payments -v ON_ERROR_STOP=1 -f /seed/02-payments.sql
+      "
+    restart: "no"
+
 volumes:
   pgdata-m3:

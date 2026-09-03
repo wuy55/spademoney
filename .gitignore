@@ -28,3 +28,6 @@ replay_pid*
 
 ### Maven ###
 target/
+# Load-test scratch. report.md and summary.json are the committed artifacts;
+# the tee'd console log is not.
+load/k6-output.txt
