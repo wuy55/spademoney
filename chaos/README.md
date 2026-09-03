@@ -11,10 +11,7 @@ Two scripts, both run against the real `docker compose` stack.
 Both take `--no-build` to skip the image rebuild. `chaos-test.sh` also takes
 `--payments N` (default 12) and `--outage SECONDS` (default 8).
 
-Requires `docker compose`, `curl` and `python3`. Deliberately not `jq` — it is
-the tool most likely to be missing on a reviewer's laptop, and "install jq
-first" is a poor opening line for a script whose whole purpose is to be run by
-somebody else.
+Requires `docker compose`, `curl` and `python3`.
 
 ---
 

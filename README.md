@@ -173,7 +173,7 @@ M1 test suite exercises.
 
 ## Quickstart
 
-Requires Docker, `curl`, and `python3`. Nothing else — not even `jq`.
+Requires Docker, `curl` and `python3`.
 
 ```bash
 git clone https://github.com/wuy55/spademoney && cd spademoney
@@ -274,7 +274,7 @@ ceiling, and the report says so rather than quoting the flattering number alone.
 
 ## Known limitations
 
-Stated here rather than discovered by a reader:
+Stated here rather than left for a reader to find:
 
 - **Both databases live in one Postgres container.** They share a failure domain,
   which a real deployment would not. It does not weaken the chaos test, which
@@ -291,6 +291,73 @@ Stated here rather than discovered by a reader:
   nobody checks would be worse than saying so.
 - **One saga driver instance.** The lease-based claim makes more of them safe,
   but that is untested and therefore unclaimed.
+- **Single currency.** `Money` rejects cross-currency arithmetic rather than
+  coercing it, so the door is closed correctly — but no FX conversion exists
+  behind it.
+- **Event payloads are JSON with no schema registry.** Fine for two services in
+  one repo; not fine for a contract other teams depend on.
+
+## What I'd do next
+
+Roughly in the order I'd actually do it, and grouped by what each buys.
+
+**Hardening the distributed claims** — these are where the current design would
+first hurt at scale:
+
+- **Replace the polling relay with CDC (Debezium on the WAL).** Polling was the
+  right call for a system this size — it needs no extra infrastructure and its
+  failure mode is a visible backlog — but it costs a poll interval of latency and
+  a repeated query. Log-based capture removes both. The outbox table stays; only
+  the reader changes, which is the point of having written it this way.
+- **Shard hot accounts.** Per-account throughput is serial by design (ordered
+  `FOR UPDATE`), and that is correct rather than accidental. The fix is splitting
+  a hot account into sub-balances that settle together, not weakening the lock.
+- **Run more than one saga driver.** The lease-based claim should already make
+  this safe; "should" is doing real work in that sentence until it is tested.
+- **Schema registry with Avro or Protobuf**, plus explicit event versioning and a
+  compatibility check in CI. JSON with no registry is a contract enforced by
+  nothing.
+
+**Making it observable** — right now correctness is *argued* and verified in
+batch; it should be visible continuously:
+
+- **OpenTelemetry traces spanning both services**, with the saga id as the trace
+  id, so a stuck payment is one span tree rather than a database query.
+- **Metrics that match the failure modes**, not generic ones: saga age histogram,
+  outbox lag, consumer lag, dead-letter depth, compensation rate.
+- **Alert on reconciliation findings**, with the money invariants paging and the
+  operational ones ticketing — the distinction the RUNBOOK already draws.
+
+**Proving it harder** — the current chaos test kills one container; real
+confidence needs more adversarial failures:
+
+- **Deterministic simulation testing.** Drive the saga against a simulated clock
+  and network so partitions, reordering and clock skew are reproducible from a
+  seed rather than dependent on `docker kill` timing.
+- **Model-check the saga state machine** (TLA+ or Alloy). The state space is
+  small enough to check exhaustively, and "no reachable state leaves funds
+  reserved with no owning saga" is exactly the kind of property a test suite
+  samples and a model checker settles.
+- **Mutation testing** on the ledger core, to find out whether the tests actually
+  constrain the invariants or merely execute them.
+
+**Payments domain depth** — the parts a production system has that this
+deliberately does not:
+
+- **Multi-currency and FX**, with the rate and its timestamp recorded on the
+  transaction, because a conversion nobody can reprice later is unauditable.
+- **External reconciliation against processor and bank files** (ISO 20022, card
+  network settlement reports). Internal invariants prove self-consistency; only
+  an external file proves the money is where the ledger says it is. This is the
+  single biggest gap between this project and a real one.
+- **Disputes and chargebacks**, incremental authorization, and a fee/interchange
+  model — the parts of the card lifecycle beyond auth/capture/refund.
+
+**Production posture** — deliberately out of scope for a portfolio artifact, and
+named so the omission is a choice rather than an oversight: Kubernetes with
+canary deploys, mTLS and OAuth2 between services, secrets in Vault with rotation,
+expand/contract migrations for zero-downtime schema change, field-level
+encryption and tokenization for PII, and multi-region with a stated RPO/RTO.
 
 ## License
 
