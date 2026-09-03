@@ -5,6 +5,7 @@ Two scripts, both run against the real `docker compose` stack.
 ```bash
 ./chaos/smoke-test.sh          # one payment, end to end
 ./chaos/chaos-test.sh          # kill the Ledger mid-saga, prove nothing was lost
+./chaos/demo.sh                # the narrated version, for a recording or a live walkthrough
 ```
 
 Both take `--no-build` to skip the image rebuild. `chaos-test.sh` also takes
@@ -16,6 +17,39 @@ first" is a poor opening line for a script whose whole purpose is to be run by
 somebody else.
 
 ---
+
+## `demo.sh` — for humans, not for CI
+
+`chaos-test.sh` proves the claim: 12 concurrent payments, killed mid-flight,
+every invariant asserted from the database. That is rigor a human watching 90
+seconds of terminal doesn't need and can't follow.
+
+`demo.sh` tells the same story with one payment and a banner between each
+beat: the balance before, the payment accepted, the kill, Payments staying up
+without its dependency, the outage, the restart, the saga finishing on its
+own with no retry command typed by hand, the balance after, and both
+services' reconciliation reporting `healthy: true`. On this machine it runs
+end to end in about 25 seconds — comfortably inside the README's 60-90s clip
+budget with room to breathe.
+
+Record it with [asciinema](https://asciinema.org/) rather than screen-capture
+video — a terminal recording is real bytes, not an edited claim, which is the
+right kind of proof for this audience:
+
+```bash
+asciinema rec chaos/demo.cast -c "./chaos/demo.sh --no-build"
+```
+
+Convert to a GIF for the README with [`agg`](https://github.com/asciinema/agg)
+(`agg chaos/demo.cast chaos/demo.gif`), or embed the `.cast` directly via the
+asciinema player.
+
+For the live 3-minute walkthrough, run it unrecorded and narrate the parts it
+doesn't say out loud: the deterministic step key, why 502 and 504 are
+different answers, why compensations run in reverse. If asked "what if it
+doesn't come back in time," switch to `chaos-test.sh --outage 75` live — that
+run declines some payments and shows the compensation path unwinding for
+real.
 
 ## Why these are scripts and not JUnit tests
 
