@@ -317,6 +317,12 @@ first hurt at scale:
 - **Schema registry with Avro or Protobuf**, plus explicit event versioning and a
   compatibility check in CI. JSON with no registry is a contract enforced by
   nothing.
+- **Redis in front of the hot reads** (balance lookups, payment-status polling) —
+  never in the write path of a money movement. `docs/adr/0005` already rejected
+  Redis for idempotency for exactly that reason and named this as the correct
+  future use: a read-through cache over derived data, with reconciliation
+  proving `cached == derived` rather than trusting the cache to invalidate
+  correctly.
 
 **Making it observable** — right now correctness is *argued* and verified in
 batch; it should be visible continuously:
@@ -353,11 +359,30 @@ deliberately does not:
 - **Disputes and chargebacks**, incremental authorization, and a fee/interchange
   model — the parts of the card lifecycle beyond auth/capture/refund.
 
-**Production posture** — deliberately out of scope for a portfolio artifact, and
-named so the omission is a choice rather than an oversight: Kubernetes with
-canary deploys, mTLS and OAuth2 between services, secrets in Vault with rotation,
-expand/contract migrations for zero-downtime schema change, field-level
-encryption and tokenization for PII, and multi-region with a stated RPO/RTO.
+**Cloud deployment** — this runs on one laptop by design: free to build,
+free to review, `git clone && docker compose up` and nothing needs hosting.
+Deploying it for real changes a specific, known set of things rather than "move
+it to the cloud" in the abstract:
+
+- Postgres → **RDS/Aurora Postgres, Multi-AZ**, one instance per service exactly
+  as now — the two-database boundary doesn't change, only who runs the box.
+- Redpanda → **MSK** (or Redpanda's own managed offering) for the same reason:
+  the outbox/inbox contract is with a Kafka-API broker, not with a specific one.
+- Ledger and Payments → **ECS Fargate or EKS**, one task definition per service,
+  horizontal scale-out enabled by the same lease-based saga claim that already
+  makes a second local driver instance safe.
+- Secrets → **Secrets Manager**, rotated, instead of compose environment
+  variables.
+- The chaos test → **the same script**, pointed at a real cluster, killing a
+  task instead of a container. Nothing about the test's assertions changes,
+  because they were never about Docker.
+
+**Other production posture** — deliberately out of scope for a portfolio
+artifact, named so each omission is a choice rather than an oversight:
+Kubernetes canary deploys and a rollback story, mTLS and OAuth2 between
+services, expand/contract migrations for zero-downtime schema change,
+field-level encryption and tokenization for PII, and multi-region with a stated
+RPO/RTO.
 
 ## License
 

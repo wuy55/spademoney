@@ -425,6 +425,21 @@ with depends on the shape. Avro or Protobuf with a registry, plus a
 backward-compatibility check in CI, turns "do not break the payload" from a
 convention into a build failure.
 
+**Redis in front of the hot reads — never in the write path of a money
+movement.** Balance lookups and payment-status polling both re-derive their
+answer from `entries` and `sagas` on every call, which is correct and is also
+the first thing to cache once a read outnumbers its writes by enough to matter.
+The scope has to be exact, though, and [ADR-0005](docs/adr/0005-no-redis-idempotency-in-postgres.md)
+already drew the line: idempotency claims stay in Postgres, in the same
+transaction as the money, because a claim that can commit independently of the
+transfer it protects reintroduces the dual-write problem the outbox exists to
+avoid. A read-through cache over *already-derived* data is a different thing —
+nothing downstream depends on the cache being right, only on it agreeing with
+Postgres — which is exactly why that ADR named this as the correct future use
+rather than ruling Redis out entirely. The addition worth pairing with it is a
+reconciliation check asserting `cached == derived`, so a stale cache is a
+finding, not a silent wrong answer.
+
 ### Making it observable
 
 Correctness here is currently *argued* in documents and *verified* in batch by
@@ -472,8 +487,8 @@ the question that actually matters: if I broke this, would anything fail?
 
 **Multi-currency and FX.** `Money` already refuses cross-currency arithmetic —
 `add` throws on a currency mismatch rather than coercing — so the door is closed
-in the right place — but there is nothing
-behind it. Doing this properly means the FX rate *and its timestamp* are recorded
+in the right place, but there is nothing behind it. Doing this properly means the
+FX rate *and its timestamp* are recorded
 on the transaction, because a conversion that cannot be repriced later is not
 auditable, and because the rate used is a fact about the payment rather than a
 lookup that happens to be current.
@@ -493,12 +508,46 @@ without a counterparty.
 compensations with a legal clock attached), incremental and partial
 authorizations, authorization reversals, and a fee and interchange model.
 
-### Production posture
+### Cloud deployment
+
+This runs on one laptop by design, not by limitation — free to build, free to
+review, `git clone && docker compose up` and nothing needs hosting. That is
+stated in the interest of not overclaiming, not as an argument that cloud
+deployment is unnecessary: it is the next thing this needs, and what changes is
+specific rather than an abstract "move it to the cloud."
+
+- **Postgres → RDS/Aurora Postgres, Multi-AZ.** One instance per service exactly
+  as now (ADR-0016) — the two-database boundary is a modelling decision, not a
+  deployment one, so a managed database changes who runs the box and nothing
+  about the argument that no transaction can span the two.
+- **Redpanda → MSK, or Redpanda's own managed offering.** The outbox and inbox
+  are written against the Kafka API, not against Redpanda specifically
+  (ADR-0004), so this is a bootstrap-server change.
+- **Ledger and Payments → ECS Fargate or EKS**, one task per service. Horizontal
+  scale-out on the Payments side is the same lease-based claim that is already
+  meant to make a second local saga driver instance safe — this is the same
+  change, at a different unit of deployment.
+- **Secrets → Secrets Manager or Vault**, rotated, in place of the compose
+  environment variables the demo uses.
+- **The chaos test still runs, unmodified in its assertions.** `chaos/chaos-test.sh`
+  would target the ECS/EKS API to kill a task instead of `docker kill`ing a
+  container; every assertion after that point — read the entries table, ask both
+  services to reconcile — was never about Docker and does not change.
+
+The reason this is not built is the same reason nothing else in "production
+posture" is: it would not change what the project is arguing. The argument is
+about the correctness of the mechanism under failure, and a laptop can kill a
+container exactly as authentically as a cluster can kill a task. What cloud
+deployment adds is operational reality — real network partitions instead of a
+Docker bridge, real multi-AZ failover, a real bill — which is worth having next,
+not worth pretending this laptop already has.
+
+### Other production posture
 
 Deliberately out of scope for a portfolio artifact, listed so the omissions read
-as decisions: Kubernetes with canary deploys and a rollback story; mTLS between
-services and OAuth2/OIDC on the operator endpoints; secrets in Vault with
-scheduled rotation; expand/contract migrations so schema changes are
-zero-downtime; field-level encryption and tokenization for anything PII-adjacent;
-multi-region with a stated RPO and RTO; and an idempotency-key retention policy,
-because `idempotency_keys` currently grows forever.
+as decisions: Kubernetes canary deploys and a rollback story; mTLS between
+services and OAuth2/OIDC on the operator endpoints; expand/contract migrations so
+schema changes are zero-downtime; field-level encryption and tokenization for
+anything PII-adjacent; multi-region with a stated RPO and RTO; and an
+idempotency-key retention policy, because `idempotency_keys` currently grows
+forever.
