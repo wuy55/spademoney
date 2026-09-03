@@ -1,12 +1,18 @@
 # SpadeMoney
 
-A distributed payments ledger, built to be defended rather than demoed.
+A double-entry payments ledger split across two services, with the distributed
+consistency problem solved rather than avoided.
 
-Double-entry money in PostgreSQL, split across two services that share no
-database and therefore cannot share a transaction. Payments are driven by an
-orchestrated saga with compensation. Kill the ledger mid-payment and it recovers
-on its own — and two independent reconciliation jobs will tell you whether it
-really did.
+Money is integer minor units in an append-only `entries` table; balances are
+derived, never stored. Authorization holds, capture, void and refunds-as-reversals
+sit on top of a four-case idempotency contract. The two services own separate
+PostgreSQL **databases**, so no transaction can span them — payments are driven
+by an orchestrated saga with compensating transactions, a transactional outbox,
+and an idempotent consumer.
+
+Kill the ledger mid-payment and it recovers with no manual intervention. Two
+independent reconciliation jobs re-derive the invariants and tell you whether it
+actually did.
 
 ![A payment surviving the ledger being killed mid-transfer](docs/demo.gif)
 
@@ -38,43 +44,130 @@ Two services, exactly:
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     client([client])
 
-    subgraph payments["Payments · owns the workflow"]
-        api["POST /payments<br/>202 + Location"]
-        saga["saga driver<br/>poller · leases · backoff+jitter"]
-        inbox[("inbox_events<br/>dedupe by event_id")]
-        limits[("sagas · saga_steps<br/>payment_limits")]
+    subgraph pay["Payments · owns the workflow"]
+        direction LR
+        papi["REST API<br/>POST /payments → 202"]
+        pdrv["saga driver<br/>@Scheduled · leases · backoff+jitter"]
+        pinb["inbox consumer<br/>dedupe by event_id"]
+        pdb[("db: payments<br/>sagas · saga_steps<br/>payment_limits · inbox_events")]
     end
 
-    subgraph ledger["Ledger · owns money"]
-        rest["POST /holds<br/>/capture · /void"]
-        money[("accounts · entries<br/>holds · idempotency_keys")]
-        outbox[("outbox")]
-        relay["relay<br/>single-threaded, id-ordered"]
+    subgraph led["Ledger · owns money"]
+        direction LR
+        lapi["REST API<br/>/holds · /capture · /void"]
+        ldb[("db: ledger<br/>accounts · entries · holds<br/>idempotency_keys · outbox")]
+        lrel["outbox relay<br/>single-threaded · id-ordered"]
     end
 
-    broker{{"Redpanda<br/>spademoney.ledger.events"}}
+    kafka{{"Redpanda · spademoney.ledger.events"}}
 
-    client -->|"1 · HTTP"| api
-    api --> limits
-    saga -->|"2 · commands, HTTP<br/>Idempotency-Key: saga:{id}:{step}"| rest
-    rest --> money
-    rest -.->|"same transaction"| outbox
-    relay --> broker
-    outbox --> relay
-    broker -->|"3 · facts"| inbox
-    inbox --> saga
+    client --> papi
+    papi --> pdb
+    pdrv <--> pdb
+    pinb --> pdb
 
-    style ledger fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    style payments fill:#0d1117,stroke:#30363d,color:#c9d1d9
+    pdrv ==>|"commands · HTTP<br/>Idempotency-Key: saga:{sagaId}:{step}"| lapi
+    lapi ==>|"money + event<br/>ONE transaction"| ldb
+    ldb --> lrel
+    lrel ==>|"publish only after broker ack"| kafka
+    kafka ==>|"facts"| pinb
 ```
 
-**Commands go one way over HTTP; facts come back the other way over Kafka.**
-The asymmetry is the design. A command can be refused and the caller needs the
-refusal synchronously. A fact has already happened and nobody may refuse it — it
-only has to arrive eventually, and exactly once in effect.
+**Read the two heavy paths in opposite directions.** Commands go out over HTTP
+(Payments → Ledger); facts come back over Kafka (Ledger → Payments). The
+asymmetry is deliberate: a command can be refused and the caller needs the
+refusal synchronously, whereas a fact has already happened, nobody may refuse
+it, and it only has to arrive *eventually* — exactly once in effect.
+
+Three things in that picture carry the whole design:
+
+1. **Two databases, not two schemas.** `db: ledger` and `db: payments` are
+   separate PostgreSQL databases in one instance. Postgres has no
+   cross-database transaction, so "just wrap both writes in one transaction" is
+   not discouraged here — it is *unavailable*. The seam is enforced by the
+   engine rather than by discipline
+   ([ADR-0016](docs/adr/0016-two-databases-one-instance.md)).
+2. **The money and the event commit together.** That is the `ONE transaction`
+   arrow. `OutboxWriter` is deliberately *not* `@Transactional`; it runs inside
+   the caller's existing transaction, and that absence is the mechanism
+   ([ADR-0019](docs/adr/0019-outbox-written-in-the-domain-transaction.md)).
+3. **The relay publishes before it marks.** At-least-once, never at-most-once —
+   marking first would trade a visible duplicate for a silent loss. The inbox
+   consumer absorbs the duplicates by claiming `event_id` and applying the
+   effect in one local transaction, which is what turns at-least-once delivery
+   into exactly-once *effects*
+   ([ADR-0020](docs/adr/0020-exactly-once-effects-not-delivery.md)).
+
+### A payment, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as client
+    participant P as Payments
+    participant L as Ledger
+    participant K as Redpanda
+
+    C->>P: POST /payments (Idempotency-Key)
+    P->>P: write saga row
+    P-->>C: 202 Accepted + Location
+
+    Note over P,L: driver advances one step per tick — every call carries saga:{sagaId}:{step}
+
+    P->>L: POST /holds
+    L->>L: reserve funds + outbox row (one txn)
+    L-->>P: 201 hold
+    L--)K: HoldAuthorized
+    K--)P: inbox dedupes by event_id
+
+    P->>P: CONSUME_LIMIT (local txn)
+
+    alt within cap
+        P->>L: POST /holds/{id}/capture
+        L->>L: post entries + outbox row (one txn)
+        L-->>P: 200 captured
+        Note over P: saga COMPLETED
+    else over cap
+        Note over P: turn around — compensate in reverse
+        P->>P: RELEASE_LIMIT
+        P->>L: POST /holds/{id}/void
+        L-->>P: 200 voided
+        Note over P: saga COMPENSATED
+    end
+```
+
+`CONSUME_LIMIT` is the only step whose effect commits in *Payments'* database,
+and it sits between two remote effects it cannot be atomic with. When it
+refuses, the hold is already real — which is the exact moment a compensating
+transaction becomes the only option available. That is why the saga exists, and
+why the middle step is where it is.
+
+The event stream is not decoration on top of the HTTP calls. Every other fact
+the saga needs arrives on a reply to a command it issued; a **hold expiring** is
+the one fact that originates on the Ledger side with nobody having asked for it,
+and no reply would ever mention it.
+
+### The full API surface
+
+| Ledger (`:8080`) | | Payments (`:8081`) | |
+|---|---|---|---|
+| `POST /transfers` | direct transfer | `POST /payments` | start a payment → `202` |
+| `GET /transfers/{id}` | | `GET /payments/{id}` | saga state + per-step detail |
+| `POST /holds` | authorize | `PUT /limits/{accountId}` | set a spending cap |
+| `POST /holds/{id}/capture` | full or partial | `GET /limits/{accountId}` | |
+| `POST /holds/{id}/void` | release | `GET /reconciliation` | 6 checks |
+| `GET /holds/{id}` | | | |
+| `POST /refunds` | reversing entries | | |
+| `GET /accounts/{id}/balance` | posted / held / available | | |
+| `GET /reconciliation` | 7 checks | | |
+
+Payments calls only `POST /holds`, `/capture`, `/void` during a saga, plus
+`GET /holds/{id}` and `GET /transfers/{id}` when reconciling. It never calls
+`POST /transfers` — that endpoint exists for direct ledger use and is what the
+M1 test suite exercises.
 
 ---
 
