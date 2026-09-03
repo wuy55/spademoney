@@ -263,7 +263,7 @@ ceiling, and the report says so rather than quoting the flattering number alone.
 
 - **[DESIGN.md](DESIGN.md)** — the whole argument: what the invariants are, where
   the distributed problem actually is, and how each mechanism earns its place.
-- **[docs/adr/](docs/adr/)** — 26 architecture decision records, including the
+- **[docs/adr/](docs/adr/)** — 27 architecture decision records, including the
   decisions *not* taken and what they cost.
 - **[RUNBOOK.md](RUNBOOK.md)** — operating it: health, stuck sagas, the
   dead-letter topic, what to do when reconciliation reports something.
@@ -360,22 +360,29 @@ deliberately does not:
   model — the parts of the card lifecycle beyond auth/capture/refund.
 
 **Cloud deployment** — this runs on one laptop by design: free to build,
-free to review, `git clone && docker compose up` and nothing needs hosting.
-Deploying it for real changes a specific, known set of things rather than "move
-it to the cloud" in the abstract:
+free to review, `git clone && docker compose up` and nothing needs hosting. It
+is also built with no dependency on any one cloud's proprietary surface — no
+vendor SDK is imported anywhere, the broker is addressed as the Kafka wire
+protocol rather than as Redpanda specifically, and every connection is
+env-var-configured rather than hardcoded ([ADR-0027](docs/adr/0027-cloud-agnostic-by-construction-deployed-nowhere-yet.md)).
+So "deploy this for real" is a small, specific mapping rather than a rewrite,
+and the same mapping exists on any of the major clouds — AWS below as one
+worked example:
 
-- Postgres → **RDS/Aurora Postgres, Multi-AZ**, one instance per service exactly
-  as now — the two-database boundary doesn't change, only who runs the box.
-- Redpanda → **MSK** (or Redpanda's own managed offering) for the same reason:
-  the outbox/inbox contract is with a Kafka-API broker, not with a specific one.
-- Ledger and Payments → **ECS Fargate or EKS**, one task definition per service,
-  horizontal scale-out enabled by the same lease-based saga claim that already
-  makes a second local driver instance safe.
-- Secrets → **Secrets Manager**, rotated, instead of compose environment
-  variables.
-- The chaos test → **the same script**, pointed at a real cluster, killing a
-  task instead of a container. Nothing about the test's assertions changes,
-  because they were never about Docker.
+| Local | AWS | Azure | GCP |
+|---|---|---|---|
+| Postgres in compose | RDS/Aurora Postgres, Multi-AZ | Azure Database for PostgreSQL | Cloud SQL for PostgreSQL |
+| Redpanda in compose | MSK | Event Hubs (Kafka endpoint) | a Kafka-API broker (e.g. Confluent Cloud) |
+| the two services | ECS Fargate or EKS | AKS | GKE / Cloud Run |
+| compose env vars | Secrets Manager | Key Vault | Secret Manager |
+
+The two-database boundary and the outbox/inbox contract don't change on any of
+these — only who runs the box. Horizontal scale-out on the Payments side is
+already the same lease-based saga claim that is meant to make a second local
+driver instance safe (untested, see limitations above). And the chaos test
+needs no rewrite: point it at a real cluster and it kills a task or a pod
+instead of a container — every assertion after that reads Postgres and calls
+`/reconciliation` over HTTP, neither of which was ever about Docker.
 
 **Other production posture** — deliberately out of scope for a portfolio
 artifact, named so each omission is a choice rather than an oversight:

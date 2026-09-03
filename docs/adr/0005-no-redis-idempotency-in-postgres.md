@@ -49,3 +49,11 @@ round trips land on the same primary that is doing the ledger writes. At this
 scale that is not a bottleneck. If it becomes one, the right response is a
 read-side cache in front of derived data, with reconciliation proving cached
 equals derived — not moving the source of truth out of the transaction.
+
+**2026-09-04 addendum:** this last paragraph is the decision that governs any
+future caching work, not just a closing remark — see "What I'd do next" in
+`README.md` and `DESIGN.md` §13, where a Redis read-through cache for balance
+lookups and payment-status polling is scoped against exactly this line. Nothing
+about the boundary changed; this note exists so a reader who reaches this ADR
+first knows the scope was decided here, before it was ever proposed as a
+concrete piece of work.
