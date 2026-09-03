@@ -386,13 +386,119 @@ timestamp that did not match the configuration.
 
 ## 13. What I would do next
 
-- **Shard hot accounts.** Per-account throughput is serial by design; the answer
-  is known and the work is not done.
-- **More than one saga driver instance.** The lease-based claim makes it safe in
-  principle. Untested, therefore unclaimed.
-- **Rolling-window spending caps** instead of a lifetime total.
-- **OpenTelemetry across the saga** — one trace spanning both services would make
-  the failure modes above visible rather than reasoned about.
-- **Separate the databases onto separate hosts**, removing the shared failure
-  domain the compose file currently has.
-- **A real authorization story** for the operator endpoints.
+Ordered by what the design's own weaknesses demand, not by what is fun.
+
+### Hardening the distributed claims
+
+**Replace the polling relay with CDC.** The relay currently polls the outbox on a
+timer. That was the right starting point — no extra infrastructure, and its
+failure mode is a backlog anyone can see — but it costs up to a poll interval of
+latency on every event and runs a query that usually finds nothing. Log-based
+capture (Debezium reading the WAL) removes both. The important part is that the
+`outbox` table does not change: only the reader does. That was the reason to put
+events in a table rather than publish them inline.
+
+The honest counterpoint, and the reason it has not been done: CDC moves a
+correctness-relevant component out of the application and into infrastructure
+that has to be operated, and it makes local development heavier. For two
+services on one box, polling is the better trade. At a hundred, it is not.
+
+**Shard hot accounts.** Per-account throughput is serial, because every debit
+takes an ordered `FOR UPDATE` on the account row (ADR-0006). That is correct, not
+accidental — it is what makes double-spend impossible — so the fix is not a
+weaker lock. It is splitting a hot account into N sub-balance rows that are
+debited independently and settle to the parent, converting lock contention into a
+rebalancing problem. That trade is worth making only once a single account is
+genuinely hot, which is why it is not made here.
+
+**Run more than one saga driver.** Claims are leases, so a second instance should
+already be safe: it would claim different rows, and even a double-driven step is
+a replay because the step key is deterministic. "Should" is doing real work in
+that sentence. The test is a two-instance run with a deliberately short lease, so
+that double-driving is common rather than rare, asserting the capture count still
+matches the completion count.
+
+**Schema registry and explicit event versioning.** Events are JSON with no
+registry, which is fine while both consumers live in this repository and neither
+is really a third party. It stops being fine the moment a team you cannot deploy
+with depends on the shape. Avro or Protobuf with a registry, plus a
+backward-compatibility check in CI, turns "do not break the payload" from a
+convention into a build failure.
+
+### Making it observable
+
+Correctness here is currently *argued* in documents and *verified* in batch by
+reconciliation. Neither is visible while it is happening.
+
+**OpenTelemetry across both services**, with the saga id propagated as the trace
+id. A stuck payment then becomes one span tree — accepted, authorized, waiting on
+a retry, capture timing out — instead of a database query and an inference. This
+is the single highest-value addition, because every failure mode in section 10 is
+currently reasoned about rather than watched.
+
+**Metrics shaped like the failure modes**, not generic dashboards: saga age
+histogram (the stuck-saga check as a live signal instead of a periodic one),
+outbox backlog, consumer lag, dead-letter depth, compensation rate, and the ratio
+of retries to first-attempt successes.
+
+**Alerting that inherits the RUNBOOK's distinction.** The five money invariants
+page a human; the two operational ones (sweeper stopped, relay stuck) raise a
+ticket. Collapsing those into one severity is how alert fatigue starts.
+
+### Proving it harder
+
+**Deterministic simulation testing.** The chaos test kills a real container, which
+is convincing but not reproducible: it took a polling loop to make the kill land
+mid-saga at all, and the timing still varies by machine. Driving the saga against
+a simulated clock and network — where a partition, a reordering or 200ms of clock
+skew is a seed rather than a race — turns "it survived once" into "it survives
+this exact sequence, every time, and here is the seed." This is the approach
+FoundationDB and TigerBeetle use, and TigerBeetle is a ledger, so the precedent is
+directly on point.
+
+**Model-check the saga state machine** in TLA+ or Alloy. The state space is small:
+five saga states, five steps, three outcomes each. Small enough to check
+exhaustively, which means a property like *no reachable state leaves funds
+reserved with no saga owning them* can be settled rather than sampled. Tests
+sample the state space; a model checker covers it. Given that the compensation
+paths are the least-exercised code in the system, that is where exhaustiveness is
+worth the most.
+
+**Mutation testing** on the ledger core. The M1 invariants have good coverage by
+line, but coverage measures execution, not constraint. Mutation testing answers
+the question that actually matters: if I broke this, would anything fail?
+
+### Payments domain depth
+
+**Multi-currency and FX.** `Money` already refuses cross-currency arithmetic —
+`add` throws on a currency mismatch rather than coercing — so the door is closed
+in the right place — but there is nothing
+behind it. Doing this properly means the FX rate *and its timestamp* are recorded
+on the transaction, because a conversion that cannot be repriced later is not
+auditable, and because the rate used is a fact about the payment rather than a
+lookup that happens to be current.
+
+**External reconciliation.** This is the biggest gap between this project and a
+production ledger, and it is worth being blunt about. The reconciliation here
+proves *self-consistency*: the ledger agrees with itself and Payments agrees with
+the ledger. It cannot prove the money is actually where the ledger says it is.
+That requires reconciling against an external source of truth — processor
+settlement files, bank statements, card network reports, ISO 20022 messages —
+and handling the cases internal checks never see: a payment the processor knows
+about and we do not, fees deducted at settlement, timing differences across a
+cutover. Everything in this repository is the half of reconciliation you can do
+without a counterparty.
+
+**The rest of the card lifecycle:** disputes and chargebacks (which are
+compensations with a legal clock attached), incremental and partial
+authorizations, authorization reversals, and a fee and interchange model.
+
+### Production posture
+
+Deliberately out of scope for a portfolio artifact, listed so the omissions read
+as decisions: Kubernetes with canary deploys and a rollback story; mTLS between
+services and OAuth2/OIDC on the operator endpoints; secrets in Vault with
+scheduled rotation; expand/contract migrations so schema changes are
+zero-downtime; field-level encryption and tokenization for anything PII-adjacent;
+multi-region with a stated RPO and RTO; and an idempotency-key retention policy,
+because `idempotency_keys` currently grows forever.
