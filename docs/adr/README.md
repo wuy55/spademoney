@@ -36,6 +36,7 @@ history.
 | [0024](0024-reconciliation-re-derives.md) | Reconciliation re-derives, and duplicates constraints on purpose | Accepted |
 | [0025](0025-test-config-layers-onto-shipped-config.md) | Test configuration layers onto shipped configuration, never replaces it | Accepted |
 | [0026](0026-scheduled-jobs-are-asserted-not-assumed.md) | Background jobs are asserted to be scheduled, not assumed | Accepted |
+| [0027](0027-cloud-agnostic-by-construction-deployed-nowhere-yet.md) | Cloud-agnostic by construction; deployed nowhere yet | Accepted |
 
 Records 0003, 0004 and 0007 were written before the code existed; 0019 through
 0024 are how those decisions actually turned out once built, and supersede the
@@ -44,3 +45,6 @@ earlier records in detail without contradicting them.
 Records 0018, 0025 and 0026 each document a bug that shipped. They are kept in
 the same series as the design decisions on purpose: what a system got wrong, and
 how it was caught, is a design record too.
+
+Record 0027, like 0003, 0004 and 0007, is binding but not yet built: the system
+is built cloud-agnostic, but nothing is deployed to any cloud yet.

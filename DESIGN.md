@@ -516,31 +516,52 @@ stated in the interest of not overclaiming, not as an argument that cloud
 deployment is unnecessary: it is the next thing this needs, and what changes is
 specific rather than an abstract "move it to the cloud."
 
-- **Postgres → RDS/Aurora Postgres, Multi-AZ.** One instance per service exactly
-  as now (ADR-0016) — the two-database boundary is a modelling decision, not a
-  deployment one, so a managed database changes who runs the box and nothing
-  about the argument that no transaction can span the two.
-- **Redpanda → MSK, or Redpanda's own managed offering.** The outbox and inbox
-  are written against the Kafka API, not against Redpanda specifically
-  (ADR-0004), so this is a bootstrap-server change.
-- **Ledger and Payments → ECS Fargate or EKS**, one task per service. Horizontal
-  scale-out on the Payments side is the same lease-based claim that is already
-  meant to make a second local saga driver instance safe — this is the same
-  change, at a different unit of deployment.
-- **Secrets → Secrets Manager or Vault**, rotated, in place of the compose
-  environment variables the demo uses.
-- **The chaos test still runs, unmodified in its assertions.** `chaos/chaos-test.sh`
-  would target the ECS/EKS API to kill a task instead of `docker kill`ing a
-  container; every assertion after that point — read the entries table, ask both
-  services to reconcile — was never about Docker and does not change.
+**It is also built with no dependency on any one cloud's proprietary surface**
+([ADR-0027](docs/adr/0027-cloud-agnostic-by-construction-deployed-nowhere-yet.md)).
+No cloud SDK is imported anywhere — verified by searching every module's
+imports, not assumed. The broker is addressed through the Kafka wire protocol,
+not a Redpanda-specific client. `gen_random_uuid()` is Postgres core since
+version 13, not an extension a specific vendor's managed offering happens to
+ship. Every connection value is environment-variable driven. None of that was
+free — it would have been faster to reach for a vendor SDK the first time a
+managed-service shortcut looked convenient — and the reason to pay for it is
+that the target list spans companies on different clouds, and a design that
+only makes sense on one of them is a worse answer at three-quarters of them.
 
-The reason this is not built is the same reason nothing else in "production
+So the mapping below is not a commitment to AWS; it is one worked example of a
+mapping that exists identically on Azure and GCP, because the thing on the left
+in every row is a standard, not a vendor's take on one:
+
+| Local | AWS | Azure | GCP |
+|---|---|---|---|
+| Postgres in compose | RDS/Aurora Postgres, Multi-AZ | Azure Database for PostgreSQL | Cloud SQL for PostgreSQL |
+| Redpanda in compose | MSK | Event Hubs (Kafka endpoint) | a Kafka-API broker, e.g. Confluent Cloud |
+| Ledger + Payments | ECS Fargate or EKS | AKS | GKE or Cloud Run |
+| compose environment variables | Secrets Manager | Key Vault | Secret Manager |
+
+The two-database boundary (ADR-0016) doesn't change under any of these — it is
+a modelling decision, not a deployment one — and neither does the outbox/inbox
+contract (ADR-0004), since it was written against the Kafka API rather than
+against Redpanda. Horizontal scale-out on the Payments side is the same
+lease-based claim that is already meant to make a second local saga driver
+instance safe (section 13's own open item — untested there, and untested here
+for the same reason). **The chaos test needs no rewrite at all.**
+`chaos/chaos-test.sh` would target whichever platform's API to kill a task or a
+pod instead of `docker kill`ing a container; every assertion after that point —
+read the entries table directly, ask both services to reconcile over HTTP — was
+never a Docker-specific mechanism and does not change.
+
+The reason none of this is built is the same reason nothing else in "production
 posture" is: it would not change what the project is arguing. The argument is
 about the correctness of the mechanism under failure, and a laptop can kill a
 container exactly as authentically as a cluster can kill a task. What cloud
 deployment adds is operational reality — real network partitions instead of a
-Docker bridge, real multi-AZ failover, a real bill — which is worth having next,
-not worth pretending this laptop already has.
+Docker bridge, real multi-AZ failover, a real bill — which is worth having
+next, not worth pretending this laptop already has. The cost of staying
+cloud-agnostic is also real and is worth naming rather than hiding: nothing
+here takes advantage of a specific cloud's differentiated primitives, and
+chasing portability across all of them is its own way of using the least
+useful subset of each.
 
 ### Other production posture
 
