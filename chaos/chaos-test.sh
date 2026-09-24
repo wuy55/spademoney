@@ -182,6 +182,12 @@ assert_eq "$SUCCEEDED" "$(psql_ledger "SELECT count(*) FROM holds WHERE status =
 unreleased="$(psql_payments "SELECT count(*) FROM limit_consumptions c JOIN sagas s ON s.id = c.saga_id WHERE c.released_at IS NULL AND s.status IN ('FAILED','COMPENSATED')")"
 assert_eq "0" "$unreleased" "no failed payment is still holding a spending cap"
 
+# The check above only means something if caps were actually consumed. Every
+# completed payment passed CONSUME_LIMIT and keeps its consumption, so this
+# count proves the cap was live for the run rather than a step that did nothing.
+kept="$(psql_payments "SELECT count(*) FROM limit_consumptions c JOIN sagas s ON s.id = c.saga_id WHERE c.released_at IS NULL AND s.status = 'COMPLETED'")"
+assert_eq "$SUCCEEDED" "$kept" "every completed payment consumed the payer's cap"
+
 step "The event pipeline caught up"
 # The Ledger kept accepting work while the broker connection and the process
 # itself were gone; the outbox is what let it. If the relay had not drained
