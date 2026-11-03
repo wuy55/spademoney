@@ -184,35 +184,43 @@ class LedgerTransactionServiceTest {
         fundAccount(acctB, 100_000L);
 
         int numThreads = 5;
-        CountDownLatch latch = new CountDownLatch(numThreads * 2);
+        // Without the gate, threads start one by one and the early ones can
+        // finish before the late ones begin, so opposite-direction transfers
+        // may never actually overlap and the test passes without a race.
+        CountDownLatch startGate = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(numThreads * 2);
         Queue<Throwable> errors = new ConcurrentLinkedQueue<>();
         // Half the threads transfer A→B, half transfer B→A
         for (int i = 0; i < numThreads; i++) {
             new Thread(() -> {
                 try {
+                    startGate.await(); // release all threads at once → tighten the race window
                     Money amount = Money.of(1000L, Currency.getInstance("USD"));
                     ledgerService.transfer(acctA, acctB, amount);
                 } catch (Throwable t) {
                     errors.add(t); // record instead of swallow
                 } finally {
-                    latch.countDown();
+                    done.countDown();
                 }
             }).start();
 
             new Thread(() -> {
                 try {
+                    startGate.await(); // release all threads at once → tighten the race window
                     Money amount = Money.of(1000L, Currency.getInstance("USD"));
                     ledgerService.transfer(acctB, acctA, amount);
                 } catch (Throwable t) {
                     errors.add(t); // record instead of swallow
                 } finally {
-                    latch.countDown();
+                    done.countDown();
                 }
             }).start();
         }
 
+        startGate.countDown();
+
         // Should complete without deadlock
-        boolean finished = latch.await(30, TimeUnit.SECONDS);
+        boolean finished = done.await(30, TimeUnit.SECONDS);
         assertThat(finished).as("threads did not finish — possible deadlock/hang").isTrue();
 
         // No transaction was killed (deadlock surfaces as a thrown exception here)
