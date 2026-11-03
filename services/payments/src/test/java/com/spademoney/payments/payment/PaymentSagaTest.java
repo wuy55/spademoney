@@ -1,6 +1,8 @@
 package com.spademoney.payments.payment;
 
+import java.net.ConnectException;
 import java.net.SocketTimeoutException;
+import java.net.http.HttpConnectTimeoutException;
 import java.util.List;
 import java.util.UUID;
 
@@ -224,6 +226,43 @@ class PaymentSagaTest {
         expectAuthorize(withHold(81L, "ACTIVE"));
         drive(1);
         assertThat(reload(accepted).holdId()).isEqualTo(81L);
+    }
+
+    /**
+     * The mirror of the read timeout, and the regression that shipped once.
+     *
+     * {@link HttpConnectTimeoutException} extends {@code HttpTimeoutException},
+     * so LedgerClient has to test for it before the general timeout or every
+     * unreachable Ledger is reported as an unknown outcome. Inside the saga both
+     * are retried, so a regression would change no state, only the reason
+     * recorded on the step. That is all there is left to pin, and it is what
+     * these two tests pin. The tests that used to guard this drove the old
+     * synchronous POST /payments and went with it.
+     */
+    @Test
+    void aConnectTimeoutIsClassifiedAsUnavailableNotAsAnUnknownOutcome() {
+        expectAuthorize(withException(new HttpConnectTimeoutException("HTTP connect timed out")));
+        PaymentView accepted = start("key-connect-timeout");
+        drive(1);
+
+        PaymentView after = reload(accepted);
+        assertThat(after.sagaStatus()).isEqualTo(PaymentSaga.RUNNING);
+        assertThat(after.steps().getFirst().lastError())
+                .contains("ledger unavailable")
+                .doesNotContain("retry is a replay");
+    }
+
+    @Test
+    void aRefusedConnectionIsClassifiedAsUnavailableNotAsAnUnknownOutcome() {
+        expectAuthorize(withException(new ConnectException("Connection refused")));
+        PaymentView accepted = start("key-connect-refused");
+        drive(1);
+
+        PaymentView after = reload(accepted);
+        assertThat(after.sagaStatus()).isEqualTo(PaymentSaga.RUNNING);
+        assertThat(after.steps().getFirst().lastError())
+                .contains("ledger unavailable")
+                .doesNotContain("retry is a replay");
     }
 
     /**
