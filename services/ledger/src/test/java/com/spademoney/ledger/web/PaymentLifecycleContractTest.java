@@ -32,9 +32,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * contract.
  *
  * Error codes covered: HOLD_NOT_ACTIVE, HOLD_EXPIRED, CAPTURE_EXCEEDS_HOLD,
- * REFUND_EXCEEDS_CAPTURED, UNREFUNDABLE, INSUFFICIENT_FUNDS,
- * IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_KEY_REQUIRED, VALIDATION_FAILED,
- * MALFORMED_REQUEST, NOT_FOUND.
+ * REFUND_EXCEEDS_CAPTURED, UNREFUNDABLE, INSUFFICIENT_FUNDS, CURRENCY_MISMATCH,
+ * UNPROCESSABLE, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_KEY_REQUIRED,
+ * IDEMPOTENCY_IN_PROGRESS, VALIDATION_FAILED, MALFORMED_REQUEST, NOT_FOUND.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -262,6 +262,43 @@ class PaymentLifecycleContractTest {
                 .andExpect(jsonPath("$.code").value("INSUFFICIENT_FUNDS"));
     }
 
+    /**
+     * CurrencyMismatchException extends IllegalArgumentException, so two
+     * handlers match it and Spring picks the more specific one. This test is
+     * what notices if that handler goes: without it every mismatch would still
+     * be a 422, but its code would silently become UNPROCESSABLE.
+     */
+    @Test
+    void aTransferIntoAnAccountOfAnotherCurrencyIs422CurrencyMismatch() throws Exception {
+        Long euroWallet = account("USER_WALLET", "EUR");
+
+        mockMvc.perform(post("/transfers")
+                .header("Idempotency-Key", "t-ccy")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fromAccountId\":" + payer + ",\"toAccountId\":" + euroWallet
+                        + ",\"amountMinor\":1000,\"currency\":\"USD\"}"))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("CURRENCY_MISMATCH"));
+
+        // fund() wrote exactly 2 entries; a refused transfer must add none.
+        assertThat(jdbcClient.sql("SELECT count(*) FROM entries").query(Long.class).single())
+                .isEqualTo(2L);
+    }
+
+    // The catch-all: a rule the domain enforces that has no code of its own.
+    @Test
+    void anAuthorizationWherePayerIsPayeeIs422Unprocessable() throws Exception {
+        mockMvc.perform(post("/holds")
+                .header("Idempotency-Key", "auth-self")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"payerAccountId\":" + payer + ",\"payeeAccountId\":" + payer
+                        + ",\"amountMinor\":1000,\"currency\":\"USD\",\"expiresInSeconds\":3600}"))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("UNPROCESSABLE"));
+
+        assertThat(holdCount()).isZero();
+    }
+
     @Test
     void unknownHoldsAndTransactionsAre404() throws Exception {
         mockMvc.perform(get("/holds/{id}", 999_999L))
@@ -421,8 +458,12 @@ class PaymentLifecycleContractTest {
     }
 
     private Long account(String type) {
-        return jdbcClient.sql("INSERT INTO accounts(type, currency) VALUES (?, 'USD') RETURNING id")
-                .param(type).query(Long.class).single();
+        return account(type, "USD");
+    }
+
+    private Long account(String type, String currency) {
+        return jdbcClient.sql("INSERT INTO accounts(type, currency) VALUES (?, ?) RETURNING id")
+                .params(type, currency).query(Long.class).single();
     }
 
     private void fund(Long walletId, long amountMinor) {
