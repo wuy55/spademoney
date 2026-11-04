@@ -7,9 +7,9 @@
 -- rather than by anyone remembering not to try.
 --
 -- Sharing one container means they also share a failure domain. That is a
--- laptop concession and it is deliberate: the chaos test in Session 12 kills
--- *application* containers, so a shared database process does not weaken what
--- that test proves.
+-- laptop concession and it is deliberate: the chaos test (chaos/chaos-test.sh)
+-- kills *application* containers, so a shared database process does not weaken
+-- what that test proves.
 --
 -- NOTE: docker-entrypoint-initdb.d scripts are skipped entirely if the data
 -- volume already exists. If these databases are missing, the volume predates

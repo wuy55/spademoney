@@ -11,16 +11,15 @@
 
 	<artifactId>payments</artifactId>
 	<name>payments</name>
-	<description>Payments orchestrator: fronts the ledger, will own the saga</description>
+	<description>Payments orchestrator: fronts the ledger and owns the saga</description>
 
 	<!--
 		There is deliberately no dependency on the `ledger` artifact, and there
 		must never be one. Payments talks to the Ledger over HTTP only, and
-		duplicates the two small wire shapes it needs (see
-		ledger/LedgerTransferCommand and ledger/LedgerTransferResult). A shared
-		jar is how a service boundary quietly becomes a monolith with extra
-		steps: it lets a change to a Ledger internal ripple into Payments at
-		compile time, which is exactly the coupling the split exists to remove.
+		duplicates the few small wire shapes it needs (see ledger/LedgerCommands).
+		A shared jar is how a service boundary quietly becomes a monolith with
+		extra steps: it lets a change to a Ledger internal ripple into Payments
+		at compile time, which is exactly the coupling the split exists to remove.
 	-->
 	<dependencies>
 		<dependency>

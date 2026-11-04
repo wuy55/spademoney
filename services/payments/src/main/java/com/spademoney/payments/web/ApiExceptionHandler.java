@@ -36,6 +36,12 @@ import com.spademoney.payments.ledger.LedgerUnavailableException;
  * double-charge. Flattening both to "the ledger broke" would erase the only
  * distinction a caller can act on — and it is the distinction the rest of M3
  * exists to make actionable.
+ *
+ * <h2>The Ledger rows are dormant</h2>
+ * No current endpoint calls the Ledger synchronously: a payment is accepted
+ * with 202 and the saga makes every Ledger call afterwards, recording the
+ * outcome as saga state. The pass-through, 502 and 504 handlers stay so the
+ * mapping is already right if a synchronous call ever returns.
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -116,8 +122,10 @@ public class ApiExceptionHandler {
      * one fact.
      *
      * {@code source} is added so a caller can tell a rejection Payments made
-     * from one it relayed. That matters the moment Payments starts rejecting
-     * things itself (Session 9's limit check).
+     * from one it relayed. Payments does reject payments itself now (the
+     * spending cap), but as saga state, read back from GET /payments/{id}, not
+     * as an HTTP error. With no synchronous Ledger call left, this handler is
+     * dormant.
      */
     @ExceptionHandler(LedgerRejectedException.class)
     public ResponseEntity<Map<String, String>> onLedgerRejection(LedgerRejectedException ex) {

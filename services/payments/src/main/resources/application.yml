@@ -12,7 +12,7 @@ spring:
     # seam is enforced by the engine instead of by discipline.
     #
     # One container for both is a laptop concession: they share a failure
-    # domain. That does not weaken the Session 12 chaos test, which kills
+    # domain. That does not weaken chaos/chaos-test.sh, which kills
     # application containers, not the database.
     url: jdbc:postgresql://localhost:5432/payments
     username: spademoney
@@ -84,7 +84,7 @@ management:
   endpoints:
     web:
       exposure:
-        # Health only. The compose healthcheck and the Session 12 chaos script
+        # Health only. The compose healthcheck and chaos/chaos-test.sh
         # need one machine-readable "is it back yet" signal, not a management
         # surface.
         include: health
