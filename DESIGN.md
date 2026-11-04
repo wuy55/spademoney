@@ -329,9 +329,10 @@ is safe either way; a *caller* still needs to know which happened.
 
 Two independent answers, and neither is "the code is careful".
 
-**Reconciliation** re-derives every invariant from raw rows — 7 checks in the
-Ledger, 6 in Payments, two of the latter crossing the boundary over HTTP. None
-asks the code that wrote the state whether it wrote it correctly.
+**Reconciliation** re-derives every invariant from raw rows — 7 checks in each
+service, two of Payments' crossing the boundary over HTTP and one asking the
+broker how deep the dead-letter topic is. None asks the code that wrote the
+state whether it wrote it correctly.
 
 Checking things the schema already enforces is deliberate: a trigger governs rows
 written *through* it and says nothing about a migration, a 3am fix, or a future

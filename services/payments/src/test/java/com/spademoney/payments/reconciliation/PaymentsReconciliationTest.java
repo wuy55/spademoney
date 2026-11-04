@@ -9,13 +9,17 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.restclient.test.autoconfigure.AutoConfigureMockRestServiceServer;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.client.MockRestServiceServer;
 
 import com.spademoney.payments.TestcontainersConfiguration;
+import com.spademoney.payments.inbox.DeadLetterDepth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -31,6 +35,10 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
  * transaction the saga claims to have created actually exists is a question only
  * the Ledger can answer, and across the boundary there is no foreign key that
  * can ask it. That is the cost of the split, paid here.
+ *
+ * The dead-letter check asks the broker, and this context has none. A
+ * hand-written fake stands in for the topic, set per test; the real reader is
+ * proven against Redpanda in LedgerEventConsumerIntegrationTest.
  */
 @SpringBootTest
 @AutoConfigureMockRestServiceServer
@@ -43,10 +51,13 @@ class PaymentsReconciliationTest {
     private MockRestServiceServer ledger;
     @Autowired
     private JdbcClient jdbcClient;
+    @Autowired
+    private FakeDeadLetterDepth deadLetters;
 
     @BeforeEach
     void reset() {
         jdbcClient.sql("TRUNCATE sagas, saga_steps, limit_consumptions, payment_limits CASCADE").update();
+        deadLetters.reset();
     }
 
     @AfterEach
@@ -63,7 +74,7 @@ class PaymentsReconciliationTest {
         assertThat(names(report)).containsExactlyInAnyOrder(
                 "NO_STUCK_SAGAS", "NO_ESCALATED_SAGAS", "FAILED_SAGAS_RELEASED_THEIR_LIMIT",
                 "NO_DANGLING_STEPS", "COMPLETED_PAYMENTS_EXIST_IN_LEDGER",
-                "FAILED_PAYMENTS_RELEASED_THEIR_HOLD");
+                "FAILED_PAYMENTS_RELEASED_THEIR_HOLD", "NO_DEAD_LETTERED_EVENTS");
     }
 
     /**
@@ -210,7 +221,80 @@ class PaymentsReconciliationTest {
         assertThat(reconciliation.reconcile().failures()).isEmpty();
     }
 
+    // ------------------------------------------------------------ broker check
+
+    @Test
+    void anEmptyDeadLetterTopicPassesTheCheck() {
+        deadLetters.depth = 0;
+
+        ReconciliationReport report = reconciliation.reconcile();
+
+        assertThat(report.failures()).isEmpty();
+        assertThat(check(report, "NO_DEAD_LETTERED_EVENTS").passed()).isTrue();
+    }
+
+    /**
+     * A parked record is an event whose effect never happened. Reporting it is
+     * the half of dead-lettering that makes the other half acceptable.
+     */
+    @Test
+    void parkedRecordsOnTheDeadLetterTopicAreReportedWithTheirCount() {
+        deadLetters.depth = 3;
+
+        ReconciliationReport report = reconciliation.reconcile();
+
+        assertThat(failedNames(report)).containsExactly("NO_DEAD_LETTERED_EVENTS");
+        assertThat(check(report, "NO_DEAD_LETTERED_EVENTS").count()).isEqualTo(3);
+        assertThat(report.healthy()).isFalse();
+    }
+
+    /**
+     * A broker that cannot be asked is not a broker with nothing on it. The
+     * check fails and says why, and the report still comes back.
+     */
+    @Test
+    void aDeadLetterTopicThatCannotBeReadIsAFindingNotAPass() {
+        deadLetters.failure = new IllegalStateException("broker did not answer within 5s");
+
+        ReconciliationReport report = reconciliation.reconcile();
+
+        assertThat(failedNames(report)).containsExactly("NO_DEAD_LETTERED_EVENTS");
+        assertThat(check(report, "NO_DEAD_LETTERED_EVENTS").detail())
+                .contains("could not be read")
+                .contains("broker did not answer");
+    }
+
     // ------------------------------------------------------------- test setup
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class DeadLetterFake {
+
+        @Bean
+        @Primary
+        FakeDeadLetterDepth fakeDeadLetterDepth() {
+            return new FakeDeadLetterDepth();
+        }
+    }
+
+    /** The topic's depth, or its failure, as each test sets it. */
+    static class FakeDeadLetterDepth implements DeadLetterDepth {
+
+        volatile long depth;
+        volatile RuntimeException failure;
+
+        void reset() {
+            depth = 0;
+            failure = null;
+        }
+
+        @Override
+        public long depth() {
+            if (failure != null) {
+                throw failure;
+            }
+            return depth;
+        }
+    }
 
     private void expectHold(long holdId, String status) {
         ledger.expect(requestTo("http://localhost:8080/holds/" + holdId))

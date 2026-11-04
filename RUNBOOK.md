@@ -81,6 +81,7 @@ an undrained outbox means consumers are behind, not that the ledger is wrong.
 | `NO_DANGLING_STEPS` | a finished saga left a step `PENDING` — a driver bug |
 | `COMPLETED_PAYMENTS_EXIST_IN_LEDGER` | Payments claims a transaction the Ledger denies |
 | `FAILED_PAYMENTS_RELEASED_THEIR_HOLD` | a failed payment left funds reserved, or was captured anyway |
+| `NO_DEAD_LETTERED_EVENTS` | records are parked on the DLT, or the broker could not be asked; **a human is required** |
 
 ---
 
@@ -164,6 +165,23 @@ A record lands here when it can never be processed — typically a missing
 `event-id` header. It is quarantined, **not handled**: the partition kept moving,
 but that event's effect never happened. Anything here needs a human to decide
 what the event should have done.
+
+Payments reconciliation reports this as `NO_DEAD_LETTERED_EVENTS`, with the
+number of parked records, and keeps reporting it on every run until the topic
+is cleared. It does not clear itself, by design: nothing in the system knows
+what the parked event should have done.
+
+Once every parked record has been dealt with, clear the topic by moving each
+partition's start offset up to its end:
+
+```bash
+docker compose exec redpanda \
+  rpk topic trim-prefix spademoney.ledger.events.DLT -o end --no-confirm
+```
+
+That deletes nothing that has not been handled, provided nothing was parked
+after you read the topic; check `rpk topic describe -p` first if the system is
+live. The next reconciliation run then passes.
 
 ### Recovering from a killed service
 

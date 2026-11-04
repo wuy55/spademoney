@@ -158,7 +158,7 @@ and no reply would ever mention it.
 | `GET /transfers/{id}` | | `GET /payments/{id}` | saga state + per-step detail |
 | `POST /holds` | authorize | `PUT /limits/{accountId}` | set a spending cap |
 | `POST /holds/{id}/capture` | full or partial | `GET /limits/{accountId}` | |
-| `POST /holds/{id}/void` | release | `GET /reconciliation` | 6 checks |
+| `POST /holds/{id}/void` | release | `GET /reconciliation` | 7 checks |
 | `GET /holds/{id}` | | | |
 | `POST /refunds` | reversing entries | | |
 | `GET /accounts/{id}/balance` | posted / held / available | | |
