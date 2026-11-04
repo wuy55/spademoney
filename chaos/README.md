@@ -133,14 +133,15 @@ released once the Ledger returned — captures matched completions exactly, and 
 hold was left reserving funds. That is the compensation path running against a
 real outage rather than a scripted 422.
 
-## Why an ordinary run still shows compensations
+## When a run shows compensations
 
-Restarting a Spring Boot service takes longer than a few retries. Payments whose
-authorization landed before the kill, and whose capture then exhausted its
-retry budget, are declined and compensated: the spending cap is released and the
-hold is voided once the Ledger returns. Those runs are the more interesting
-ones, because they exercise the compensation path against a real outage rather
-than against a scripted 422.
+The default 8 s outage recovers everything: the forward retry budget outlasts a
+Ledger restart, so all 12 payments complete (the table above). A long outage,
+such as `--outage 75`, outlasts that budget. Payments whose authorization landed
+before the kill, and whose capture then ran out of attempts, are declined and
+compensated: the spending cap is released and the hold is voided once the Ledger
+returns. That run is the more interesting one, because it exercises the
+compensation path against a real outage rather than against a scripted 422.
 
 Compensations get a much larger retry budget than forward steps
 (`spademoney.saga.compensation-max-attempts`), and that asymmetry came directly

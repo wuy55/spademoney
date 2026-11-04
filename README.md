@@ -253,8 +253,8 @@ a check that asks the system whether the system is correct is not a check:
 - no hold left reserving funds, no spending cap left held
 
 **Load** ([`load/report.md`](load/report.md)) — the accept path is not the
-constraint; it is a single insert, and it stayed flat from 50 to 200 req/s with
-a sub-10ms p99 and no errors. The saga driver's configured throughput is the real
+constraint; it is a single insert, and at 200 req/s it held a sub-10ms p99 with
+no errors. The saga driver's configured throughput is the real
 ceiling, and the report says so rather than quoting the flattering number alone.
 
 ---

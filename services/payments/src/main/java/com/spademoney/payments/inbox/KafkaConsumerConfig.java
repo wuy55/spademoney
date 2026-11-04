@@ -32,10 +32,13 @@ import org.springframework.util.backoff.ExponentialBackOff;
  * the exact moment it needs room. Backing off geometrically gives it that room.
  *
  * <h2>Some failures must not be retried at all</h2>
- * A record with no event-id header will still have no event-id header in eight
- * seconds. {@link UnprocessableEventException} is registered as non-retryable so
- * it is dead-lettered on the first attempt, rather than costing the partition
- * several seconds of head-of-line blocking to reach the same conclusion.
+ * A record with no event-id header will still have no event-id header after
+ * every retry. The backoff below allows six attempts over about fifteen
+ * seconds (waits of 0.5, 1, 2, 4 and 8 s: the elapsed-time cap is checked
+ * before each wait, so the last one overshoots it).
+ * {@link UnprocessableEventException} is registered as non-retryable so it is
+ * dead-lettered on the first attempt, rather than costing the partition that
+ * much head-of-line blocking to reach the same conclusion.
  */
 @Configuration(proxyBeanMethods = false)
 class KafkaConsumerConfig {

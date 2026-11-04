@@ -29,8 +29,9 @@ import static org.assertj.core.api.Assertions.*;
  * (CREDIT:+amount, DEBIT:-amount) == 0. Holds because every posting
  * (funding AND transfer) is balanced by construction; the DB deferred
  * trigger enforces it per transaction, this proves it globally.
- * (2) No USER_WALLET ever goes negative — the ordered FOR UPDATE lock +
- * atomic overdraft check must hold under random interleavings.
+ * (2) No USER_WALLET ever goes negative — the overdraft check must hold
+ * under random sequences of operations. The ops run one at a time, so this
+ * proves the arithmetic, not the locks; the concurrency tests prove those.
  *
  * Note the CASH account is deliberately NOT asserted non-negative: it is the
  * system account money is issued *from* (a deposit debits CASH, credits the

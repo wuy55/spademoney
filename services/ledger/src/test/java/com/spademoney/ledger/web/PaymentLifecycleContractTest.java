@@ -21,8 +21,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The published HTTP contract for the payment lifecycle, exercised over real
- * HTTP rather than through the services.
+ * The published HTTP contract for the payment lifecycle, exercised at the HTTP
+ * layer rather than through the services: the full Spring MVC stack via
+ * MockMvc, against real Postgres, with no socket. The over-the-wire proof is
+ * chaos/smoke-test.sh.
  *
  * This exists because docs/openapi.yaml is HAND-WRITTEN. A generated spec cannot
  * lie about the code; a hand-written one can drift the moment a status code or a
