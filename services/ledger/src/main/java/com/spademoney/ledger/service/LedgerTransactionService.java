@@ -59,6 +59,13 @@ public class LedgerTransactionService {
      */
     @Transactional
     public Long transfer(Long fromAccountId, Long toAccountId, Money amount) {
+        // Checked here rather than left to the lock: with one account the
+        // IN (?, ?) matches a single row and lockBothAscending reports it as
+        // not found, a 404 for an account that exists. /holds refuses the
+        // same mistake explicitly, and so does this, as a 422.
+        if (fromAccountId.equals(toAccountId)) {
+            throw new IllegalArgumentException("Source and destination must differ");
+        }
         lockBothAscending(fromAccountId, toAccountId, amount.currency().getCurrencyCode());
 
         long available = balances.available(fromAccountId);

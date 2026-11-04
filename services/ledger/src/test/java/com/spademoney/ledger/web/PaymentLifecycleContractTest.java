@@ -287,6 +287,26 @@ class PaymentLifecycleContractTest {
                 .isEqualTo(2L);
     }
 
+    /**
+     * The account exists, so this is not a 404, which is what it answered
+     * before transfer() checked it. It is the same refusal /holds makes when
+     * payer and payee are the same account.
+     */
+    @Test
+    void aTransferToTheSameAccountIs422Unprocessable() throws Exception {
+        mockMvc.perform(post("/transfers")
+                .header("Idempotency-Key", "t-self")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fromAccountId\":" + payer + ",\"toAccountId\":" + payer
+                        + ",\"amountMinor\":1000,\"currency\":\"USD\"}"))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("UNPROCESSABLE"))
+                .andExpect(jsonPath("$.message").value("Source and destination must differ"));
+
+        assertThat(jdbcClient.sql("SELECT count(*) FROM entries").query(Long.class).single())
+                .isEqualTo(2L);
+    }
+
     // The catch-all: a rule the domain enforces that has no code of its own.
     @Test
     void anAuthorizationWherePayerIsPayeeIs422Unprocessable() throws Exception {

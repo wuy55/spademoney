@@ -62,7 +62,9 @@ paths:
       description: |
         Posts a balanced double entry: the payer is debited and the payee
         credited in one transaction. Rejected if the payer's **available**
-        balance (not merely posted) is below the amount.
+        balance (not merely posted) is below the amount
+        (`422 INSUFFICIENT_FUNDS`), and if the payer and payee are the same
+        account (`422 UNPROCESSABLE`).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
