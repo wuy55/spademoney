@@ -42,8 +42,9 @@ Convert to a GIF for the README with [`agg`](https://github.com/asciinema/agg)
 asciinema player.
 
 For the live 3-minute walkthrough, run it unrecorded and narrate the parts it
-doesn't say out loud: the deterministic step key, why 502 and 504 are
-different answers, why compensations run in reverse. If asked "what if it
+doesn't say out loud: the deterministic step key, why a read timeout no
+longer has to be told apart from a refused connection, why compensations run
+in reverse. If asked "what if it
 doesn't come back in time," switch to `chaos-test.sh --outage 75` live — that
 run declines some payments and shows the compensation path unwinding for
 real.

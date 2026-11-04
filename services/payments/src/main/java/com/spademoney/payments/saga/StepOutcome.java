@@ -7,8 +7,9 @@ package com.spademoney.payments.saga;
  * The taxonomy is the design. A step executor is not allowed to return "it
  * failed" — it has to say whether trying again could help, because that single
  * distinction decides between a retry, a compensation, and a payment left
- * hanging. It is the same distinction {@code LedgerClient} draws between 502 and
- * 504, carried up to where a decision gets made.
+ * hanging. It is the line {@code LedgerClient} draws between a rejection the
+ * Ledger made (4xx, terminal) and a transport failure (5xx, unreachable, or a
+ * timeout, all retried), carried up to where a decision gets made.
  */
 public sealed interface StepOutcome {
 

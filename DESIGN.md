@@ -298,9 +298,11 @@ command it issued, and a lost response is handled by retrying.
 
 **An expiry is different: nobody issued it.** The Ledger releases a lapsed hold on
 its own, and no reply to any request Payments made will ever mention it. Without
-the event, a saga whose hold expired would keep retrying `CAPTURE` against funds
-already released, exhaust its budget, and report a timeout — the right ending for
-the wrong reason, minutes late.
+the event the saga still ends correctly: `CAPTURE` gets `422 HOLD_EXPIRED` and
+the saga compensates, so no money is at risk. What the event buys is a head
+start, and the true reason when the HTTP path is partitioned but the broker is
+not, where a capture that keeps timing out would otherwise run out of attempts
+and report that instead.
 
 So the event stream carries the facts that **originate on the other side of the
 boundary**. That is the job, and it is the only one it has here.
@@ -322,9 +324,12 @@ boundary**. That is the job, and it is the only one it has here.
 | Hold expires mid-saga | learned from the event stream; saga turns around |
 | Compensation cannot complete | `COMPENSATION_FAILED` — escalated, not retried away, not hidden |
 
-**502 and 504 stay different answers at the API boundary** even though the saga
-treats both as retryable. The saga can afford to conflate them because its retry
-is safe either way; a *caller* still needs to know which happened.
+**502 and 504 are different answers** — "not processed" against "outcome
+unknown" — and the saga treats both as retryable, because its retry is a replay
+either way. No caller receives either today: every Ledger call is made by the
+saga after `POST /payments` has already answered `202`. The handlers that map
+them stay, so the answers are already right if a synchronous call ever returns
+(ADR-0018, ADR-0021).
 
 ## 11. How you know
 
@@ -488,7 +493,7 @@ the question that actually matters: if I broke this, would anything fail?
 ### Payments domain depth
 
 **Multi-currency and FX.** `Money` already refuses cross-currency arithmetic —
-`add` throws on a currency mismatch rather than coercing — so the door is closed
+`plus` throws on a currency mismatch rather than coercing — so the door is closed
 in the right place, but there is nothing behind it. Doing this properly means the
 FX rate *and its timestamp* are recorded
 on the transaction, because a conversion that cannot be repriced later is not
