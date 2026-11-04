@@ -115,9 +115,11 @@ public class LedgerTransactionService {
     }
 
     /**
-     * Both sides in ONE statement so the deferred entries_balanced trigger sees
-     * a complete, balanced transaction rather than firing mid-insert on a
-     * one-sided posting.
+     * Both sides in ONE statement. entries_balanced is DEFERRABLE INITIALLY
+     * DEFERRED, so it checks at commit and two separate INSERTs would pass it
+     * too. One statement is belt and braces: it stays balanced even if a
+     * session sets the constraint IMMEDIATE, where it would check after each
+     * statement, and it saves a round trip.
      *
      * Ledger primitive, and deliberately unguarded: it posts what it is told.
      * Every caller is responsible for having established that the debit is

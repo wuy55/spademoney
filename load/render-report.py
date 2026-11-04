@@ -95,12 +95,18 @@ only the first would be the flattering and misleading version of this test.
 **The completion rate is the interesting number, and it is bounded by
 configuration, not by the database.** The saga driver claims at most
 `spademoney.saga.batch-size` (20) sagas per tick and advances each by one step
-per tick, at `spademoney.saga.interval` (250 ms) — a ceiling of roughly 80 steps
-per second, and each payment needs three steps. That ceiling is a deliberate
-choice for a single-instance demo, not a discovered limit: raising the batch size
-or shortening the interval moves it, and the lease-based claim means additional
-driver instances are safe to add (ADR-0022). What this run establishes is that
-the ceiling behaves predictably and that correctness holds at it.
+per tick. A payment takes four ticks: three steps, then one that finds nothing
+left to do and marks it complete. Ticks are a fixed delay apart
+(`spademoney.saga.interval`, 250 ms) measured from the end of the previous tick,
+so each period is 250 ms plus that tick's own work. Twenty claims a tick at
+fewer than four ticks a second is under 80 claims a second; at four claims a
+payment, the ceiling is under 20 payments a second, and the measured
+completion rate shows how far under. That ceiling is a deliberate choice for a
+single-instance demo, not a discovered limit: raising the batch size or
+shortening the interval moves it. Additional driver instances are safe by
+design, because the claim is a lease taken with `FOR UPDATE SKIP LOCKED`
+(ADR-0022), but no test runs two of them. What this run establishes is that the
+ceiling behaves predictably and that correctness holds at it.
 
 ## Correctness held under load
 

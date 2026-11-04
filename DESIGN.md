@@ -11,9 +11,10 @@ know any of it worked is that something independent re-derives it and says so.**
 
 ## 1. Money
 
-Integer minor units in a `long`, plus an ISO-4217 currency code. `Money` refuses
-float construction, zero, negatives, and cross-currency arithmetic at the
-boundary, so those cannot be represented rather than merely being discouraged.
+Integer minor units in a `long`, plus an ISO-4217 currency code. `Money` has no
+floating-point constructor, refuses zero and negatives at construction, and
+refuses cross-currency arithmetic in `plus`, so those cannot be represented
+rather than merely being discouraged.
 
 Floats are excluded for the obvious reason — `0.1 + 0.2` — but the more useful
 framing is that a float is a *lossy* type, and the loss is silent and
