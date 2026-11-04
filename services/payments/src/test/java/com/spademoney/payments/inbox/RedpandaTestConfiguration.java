@@ -9,9 +9,9 @@ import org.testcontainers.redpanda.RedpandaContainer;
  * A real broker for the consumer tests, and only for them.
  *
  * The rest of this module runs with the listener disabled (see
- * src/test/resources/application.yml). Booting a broker for tests about HTTP
- * translation would add container-start time to every one of them and prove
- * nothing they are about.
+ * src/test/resources/application-test-overrides.yml). Booting a broker for
+ * tests about HTTP translation would add container-start time to every one of
+ * them and prove nothing they are about.
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class RedpandaTestConfiguration {

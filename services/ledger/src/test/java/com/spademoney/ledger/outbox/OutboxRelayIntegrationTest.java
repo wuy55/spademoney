@@ -39,10 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * One test class, one container. Everything else in the module stays broker-free.
  */
 // Topic auto-creation is switched back on for this class alone. It is off for
-// the rest of the suite (see src/test/resources/application.yml), because
-// KafkaAdmin logs a stack trace on every context start when there is no broker
-// to talk to -- 130 tests' worth of noise announcing something that is not a
-// problem. Here there IS a broker, and the declared three-partition topic is
+// the rest of the suite (see src/test/resources/application-test-overrides.yml),
+// because KafkaAdmin logs a stack trace on every context start when there is no
+// broker to talk to -- a whole suite's worth of noise announcing something that
+// is not a problem. Here there IS a broker, and the declared three-partition topic is
 // part of what this test exists to exercise.
 @SpringBootTest(properties = "spring.kafka.admin.auto-create=true")
 @Import({ TestcontainersConfiguration.class, RedpandaTestConfiguration.class })

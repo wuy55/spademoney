@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * exception that proves why the rule has one. Spring's default HTTP client
  * timeout is effectively infinite, and nothing else in the build notices if
  * these lines are deleted -- every existing test would stay green while
- * Session 12's chaos demo quietly turned into a terminal that never returns.
+ * chaos/chaos-test.sh quietly turned into a terminal that never returns.
  * The failure mode is invisible until the exact moment it is most expensive, so
  * it gets an explicit assertion.
  */

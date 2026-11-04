@@ -57,7 +57,7 @@ management:
   endpoints:
     web:
       exposure:
-        # Health only -- the compose healthcheck and the Session 12 chaos script
+        # Health only -- the compose healthcheck and chaos/chaos-test.sh
         # need a machine-readable "the Ledger is back" signal. Retrofitting that
         # later, while debugging a kill script, is miserable.
         include: health

@@ -11,10 +11,16 @@ package com.spademoney.payments.inbox;
  * with the effect, so the event is genuinely unprocessed and redelivery is
  * correct rather than merely tolerable.
  *
- * The list is empty in this commit. The first handler is the saga's step
- * confirmation, and it is the reason the seam exists: a saga must learn that a
- * hold was authorized even when the HTTP response that would have told it was
- * lost.
+ * One implementation exists: {@code saga/SagaLedgerEventHandler}, which
+ * handles {@code HoldExpired}. It is the reason the seam exists: an expiry is
+ * a fact nobody asked for, so no HTTP reply will ever carry it. The saga
+ * learns about authorizations from the replies to its own commands, and
+ * retries when one is lost.
+ *
+ * History: the seam was added before any handler, and the first one was
+ * planned as step confirmation, learning about an authorization when its HTTP
+ * reply was lost. What shipped in 822cb01 handles expiry instead; a lost reply
+ * is covered by retrying with the deterministic step key.
  */
 public interface InboxEventHandler {
 

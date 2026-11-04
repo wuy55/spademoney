@@ -28,8 +28,8 @@ RUN ./mvnw -B -pl services/payments -am -DskipTests package
 FROM eclipse-temurin:25-jre
 WORKDIR /app
 
-# curl is for the compose healthcheck, and stays for the Session 12 chaos
-# script, which needs to ask "is it back yet?" from inside the network.
+# curl is for the compose healthcheck, and stays for chaos/chaos-test.sh,
+# which needs to ask "is it back yet?" from inside the network.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*

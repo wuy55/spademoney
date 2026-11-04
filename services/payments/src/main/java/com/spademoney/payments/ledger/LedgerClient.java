@@ -126,7 +126,9 @@ public class LedgerClient {
      * They look alike and mean opposite things. Failing to connect means no
      * bytes reached the Ledger, so the money certainly did not move and a retry
      * is safe: 502. Connecting and then hearing nothing means the request may
-     * have been processed and the answer lost: 504, and nobody may retry it.
+     * have been processed and the answer lost: 504. Only a retry carrying the
+     * same idempotency key is safe after that, which is exactly what the saga
+     * sends.
      *
      * The ordering below is load-bearing.
      * {@link HttpConnectTimeoutException} <em>extends</em>
@@ -148,7 +150,7 @@ public class LedgerClient {
             }
 
             // Connected, then silence. Whether it posted is unknown -- see
-            // LedgerTimeoutException for why that is left unresolved.
+            // LedgerTimeoutException for why the saga can retry it safely.
             if (cause instanceof HttpTimeoutException || cause instanceof SocketTimeoutException) {
                 return new LedgerTimeoutException(
                         "Ledger did not respond within the read timeout; "

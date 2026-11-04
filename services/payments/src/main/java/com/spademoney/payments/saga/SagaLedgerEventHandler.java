@@ -17,10 +17,12 @@ import com.spademoney.payments.inbox.InboxEventHandler;
  * Every other fact the saga needs comes back on the HTTP response of a command
  * it issued, and if that response is lost it retries. An expiry is different:
  * nobody issued it. The Ledger releases a lapsed hold on its own, and no reply
- * to any request Payments made will ever mention it. Without the event, a saga
- * whose hold expired would keep retrying CAPTURE against funds that had already
- * been released, exhaust its attempts, and report a timeout — the right ending
- * for the wrong reason, several minutes late.
+ * to any request Payments made will ever mention it. Without the event, the
+ * saga finds out at CAPTURE, when the Ledger answers 422 HOLD_EXPIRED, and
+ * compensates from there; no money is lost either way. What the event buys is
+ * a head start, and the true reason when the HTTP path is partitioned but the
+ * broker is not: a saga whose capture keeps timing out would otherwise retry
+ * until it ran out of attempts and report that instead.
  *
  * That is the honest answer to "what does the event stream actually buy you
  * here". Not the happy path — commands and their replies handle that — but the

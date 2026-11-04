@@ -18,9 +18,9 @@ import org.springframework.web.client.RestClient;
  *
  * The values themselves are load-bearing, not defaults left alone. Spring's
  * out-of-the-box behaviour is effectively "wait forever", which would turn
- * Session 12's chaos demo — kill the Ledger mid-transfer — into a hung terminal
- * instead of a 504 anybody can see. {@code LedgerTimeoutsTest} fails the build
- * if they go missing.
+ * chaos/chaos-test.sh — kill the Ledger mid-saga — into a saga step that hangs
+ * instead of one that times out and is retried. {@code LedgerTimeoutsTest}
+ * fails the build if they go missing.
  */
 @Configuration(proxyBeanMethods = false)
 class LedgerClientConfig {
