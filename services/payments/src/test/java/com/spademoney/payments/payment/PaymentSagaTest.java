@@ -21,6 +21,8 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.ExpectedCount;
 
 import com.spademoney.payments.TestcontainersConfiguration;
+import com.spademoney.payments.inbox.InboxEvent;
+import com.spademoney.payments.inbox.InboxService;
 import com.spademoney.payments.limit.PaymentLimitService;
 import com.spademoney.payments.saga.PaymentSaga;
 import com.spademoney.payments.saga.SagaDriver;
@@ -67,11 +69,14 @@ class PaymentSagaTest {
     @Autowired
     private MockRestServiceServer ledger;
     @Autowired
+    private InboxService inbox;
+    @Autowired
     private JdbcClient jdbcClient;
 
     @BeforeEach
     void reset() {
-        jdbcClient.sql("TRUNCATE sagas, saga_steps, limit_consumptions, payment_limits CASCADE").update();
+        jdbcClient.sql("TRUNCATE sagas, saga_steps, limit_consumptions, payment_limits, inbox_events CASCADE")
+                .update();
     }
 
     @AfterEach
@@ -493,7 +498,78 @@ class PaymentSagaTest {
         assertThat(reload(accepted).sagaStatus()).isEqualTo(PaymentSaga.COMPENSATED);
     }
 
+    // ------------------------------------------------------------ hold expiry
+
+    /**
+     * The one fact the saga learns from Kafka rather than from an HTTP reply.
+     *
+     * Nobody asked for an expiry, so no response will ever mention it. The
+     * event is fed through InboxService, the same path the listener uses, with
+     * no broker: what is under test is the handler and the state machine it
+     * drives, not the plumbing. The saga turns around at once, with the true
+     * reason, and VOID then finds the hold already EXPIRED and counts its goal
+     * as met. Without the event the same saga would only find out at CAPTURE,
+     * from a 422.
+     */
+    @Test
+    void aHoldExpiringUnderARunningSagaTurnsItAround() {
+        expectAuthorize(withHold(90L, "ACTIVE"));
+        PaymentView accepted = start("key-expired");
+        drive(1); // AUTHORIZE done, hold 90 recorded
+
+        inbox.process(holdExpired(90L));
+
+        PaymentView turned = reload(accepted);
+        assertThat(turned.sagaStatus()).isEqualTo(PaymentSaga.COMPENSATING);
+        assertThat(turned.failureCode()).isEqualTo("HOLD_EXPIRED");
+
+        ledger.reset();
+        ledger.expect(requestTo("http://localhost:8080/holds/90/void"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"code":"HOLD_NOT_ACTIVE","message":"Hold 90 is EXPIRED"}
+                                """));
+        ledger.expect(requestTo("http://localhost:8080/holds/90"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withHold(90L, "EXPIRED"));
+        drive(3);
+
+        PaymentView after = reload(accepted);
+        assertThat(after.sagaStatus()).isEqualTo(PaymentSaga.COMPENSATED);
+        assertThat(after.failureCode()).isEqualTo("HOLD_EXPIRED");
+        // Nothing after AUTHORIZE ran forward, so VOID is the only thing to undo.
+        assertThat(stepStatuses(after)).containsExactly("AUTHORIZE=SUCCEEDED", "VOID=SUCCEEDED");
+        assertThat(after.ledgerTransactionId()).isNull();
+    }
+
+    /**
+     * The turnaround is conditional on the saga still being RUNNING. A saga
+     * that has already ended stays ended, whatever arrives for its hold.
+     */
+    @Test
+    void anExpiryForASagaThatAlreadyFinishedChangesNothing() {
+        expectAuthorize(withHold(91L, "ACTIVE"));
+        expectCapture(91L, withCapture(91L, 504L));
+        PaymentView accepted = start("key-expired-late");
+        drive(4);
+        assertThat(reload(accepted).sagaStatus()).isEqualTo(PaymentSaga.COMPLETED);
+
+        inbox.process(holdExpired(91L));
+
+        PaymentView after = reload(accepted);
+        assertThat(after.sagaStatus()).isEqualTo(PaymentSaga.COMPLETED);
+        assertThat(after.failureCode()).isNull();
+        assertThat(after.ledgerTransactionId()).isEqualTo(504L);
+    }
+
     // ------------------------------------------------------------- utilities
+
+    private static InboxEvent holdExpired(long holdId) {
+        return new InboxEvent(UUID.randomUUID(), "HoldExpired", "HOLD", Long.toString(holdId),
+                "{\"holdId\":" + holdId + "}", "spademoney.ledger.events", 0, 0L);
+    }
 
     private PaymentView start(String key) {
         return payments.start(key, new PaymentRequest(PAYER, PAYEE, AMOUNT, "USD"));
