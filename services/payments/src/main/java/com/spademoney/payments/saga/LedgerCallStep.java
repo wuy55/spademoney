@@ -31,10 +31,10 @@ import com.spademoney.payments.ledger.LedgerUnavailableException;
  * response to "I don't know" turns out not to be finding out — it is making the
  * question harmless.
  *
- * That is also why 502 and 504 land in the same bucket <em>here</em> while
- * remaining different answers at the API boundary. The saga treats them alike
- * because its retry is safe either way; a caller still needs to be told which
- * one happened.
+ * That is also why 502 and 504 land in the same bucket here. They still mean
+ * different things, "not processed" against "outcome unknown", but the saga
+ * treats them alike because its retry is safe either way. No API caller is
+ * told either one today, since no endpoint calls the Ledger synchronously.
  */
 abstract class LedgerCallStep implements SagaStepExecutor {
 

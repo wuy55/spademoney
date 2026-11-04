@@ -70,8 +70,9 @@ spring:
   http:
     clients:
       # The Ledger client's timeouts. Not decoration -- Spring's default is
-      # effectively "wait forever", which turns a killed Ledger into a hung
-      # request instead of a 504 with a name. See LedgerClientConfig for why
+      # effectively "wait forever", which turns a killed Ledger into a saga
+      # step that hangs instead of one that times out and is retried. See
+      # LedgerClientConfig for why
       # they live in configuration rather than in code, and LedgerTimeoutsTest
       # for the assertion that keeps them here.
       connect-timeout: 2s
