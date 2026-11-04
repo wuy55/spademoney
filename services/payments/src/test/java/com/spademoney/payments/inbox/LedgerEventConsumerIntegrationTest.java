@@ -50,6 +50,8 @@ class LedgerEventConsumerIntegrationTest {
     private LedgerProperties ledgerProperties;
     @Autowired
     private KafkaConnectionDetails kafkaConnectionDetails;
+    @Autowired
+    private DeadLetterDepth deadLetterDepth;
 
     @BeforeEach
     void reset() {
@@ -103,9 +105,15 @@ class LedgerEventConsumerIntegrationTest {
      * dedupe on and no way to recognise its redelivery. Retrying it would block
      * every later event on that partition forever, so it is dead-lettered on the
      * first attempt -- and, crucially, the events behind it still arrive.
+     *
+     * It also proves that the depth reconciliation reports is read from the
+     * real broker. A delta rather than an absolute, because the container is
+     * shared across the class.
      */
     @Test
     void aRecordWithNoEventIdIsDeadLetteredAndDoesNotBlockThePartition() {
+        long parkedBefore = deadLetterDepth.depth();
+
         ProducerRecord<String, String> poison =
                 new ProducerRecord<>(ledgerProperties.eventsTopic(), "HOLD:99", "{\"holdId\":99}");
         poison.headers().add("event-type", "HoldAuthorized".getBytes(StandardCharsets.UTF_8));
@@ -120,6 +128,8 @@ class LedgerEventConsumerIntegrationTest {
         List<ConsumerRecord<String, String>> parked = drain(ledgerProperties.deadLetterTopic());
         assertThat(parked).isNotEmpty();
         assertThat(parked.getFirst().value()).contains("\"holdId\":99");
+
+        assertThat(deadLetterDepth.depth()).isGreaterThanOrEqualTo(parkedBefore + 1);
     }
 
     private void publish(UUID eventId, String eventType, String aggregateType,

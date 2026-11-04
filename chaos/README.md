@@ -150,6 +150,22 @@ escalated a dead end it would have cleared itself given a few more seconds.
 "Declined" is an acceptable answer for a forward step; there is no acceptable
 alternative to releasing a customer's funds.
 
+## A dirty dead-letter topic fails every run
+
+`smoke-test.sh` and `chaos-test.sh` require both services to reconcile
+`healthy: true` (`demo.sh` shows the verdict without failing on it), and
+Payments' reconciliation fails while anything is parked on
+`spademoney.ledger.events.DLT`. A broker kept from an earlier poison-message
+experiment will therefore fail a run that is otherwise clean, which is correct:
+the system really does have an event it never applied.
+
+The scripts run `docker compose up`, which keeps the existing Redpanda container
+and its data. The image keeps its data in an anonymous volume, so the topic
+survives `stop`/`start` and even a recreated container; it does **not** survive
+`docker compose down` followed by `up`, which starts the broker empty. To start
+clean, either clear the topic (RUNBOOK, "Messages in the dead-letter topic") or
+run `docker compose down -v` first, which also wipes both databases.
+
 ## Known limitation
 
 Both databases live in one Postgres container, so they share a failure domain.

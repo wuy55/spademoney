@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
+import com.spademoney.payments.inbox.DeadLetterDepth;
 import com.spademoney.payments.ledger.LedgerClient;
 import com.spademoney.payments.ledger.LedgerCommands;
 import com.spademoney.payments.reconciliation.ReconciliationReport.Check;
@@ -35,20 +36,30 @@ import com.spademoney.payments.reconciliation.ReconciliationReport.Check;
  * window is sampled instead. That makes this check a smoke alarm rather than a
  * proof over all history — worth stating rather than glossing, and it is why the
  * chaos script reconciles immediately after the run it cares about.
+ *
+ * <h2>The broker check stays failed until a human acts</h2>
+ * A record on the dead-letter topic is an event this service could not apply,
+ * so one aggregate's story is missing a chapter. Nothing here can tell what the
+ * event should have done, so nothing here clears the finding either: like
+ * NO_ESCALATED_SAGAS, it fails on every run until someone handles the record
+ * and trims the topic (RUNBOOK, "Messages in the dead-letter topic").
  */
 @Service
 public class PaymentsReconciliationService {
 
     private final JdbcClient jdbcClient;
     private final LedgerClient ledger;
+    private final DeadLetterDepth deadLetters;
     private final Duration stuckAfter;
     private final int remoteSample;
 
     public PaymentsReconciliationService(JdbcClient jdbcClient, LedgerClient ledger,
+            DeadLetterDepth deadLetters,
             @Value("${spademoney.reconciliation.stuck-after:PT2M}") Duration stuckAfter,
             @Value("${spademoney.reconciliation.remote-sample:50}") int remoteSample) {
         this.jdbcClient = jdbcClient;
         this.ledger = ledger;
+        this.deadLetters = deadLetters;
         this.stuckAfter = stuckAfter;
         this.remoteSample = remoteSample;
     }
@@ -61,6 +72,7 @@ public class PaymentsReconciliationService {
         checks.add(noTerminalSagaLeftAStepInFlight());
         checks.add(everyCompletedPaymentExistsInTheLedger());
         checks.add(everyCompensatedPaymentReleasedItsHold());
+        checks.add(nothingIsDeadLettered());
         return ReconciliationReport.of("payments", checks);
     }
 
@@ -237,5 +249,28 @@ public class PaymentsReconciliationService {
         return Check.ofViolations("FAILED_PAYMENTS_RELEASED_THEIR_HOLD", problems.size(),
                 "every recent failed payment left its hold released (" + recent.size() + " sampled)",
                 "failed payments whose hold is unresolved: " + problems);
+    }
+
+    // ------------------------------------------------------------ broker check
+
+    /**
+     * Every record the consumer parked, still sitting on the dead-letter topic.
+     *
+     * Parking keeps the partition moving at the cost of one event's effect, and
+     * that trade is only acceptable if somebody hears about it. This is where
+     * they hear. A broker that cannot be asked is reported too, rather than
+     * read as "nothing parked": an unanswered question is not a clean answer.
+     */
+    private Check nothingIsDeadLettered() {
+        long parked;
+        try {
+            parked = deadLetters.depth();
+        } catch (RuntimeException e) {
+            return Check.fail("NO_DEAD_LETTERED_EVENTS", 1,
+                    "dead-letter topic could not be read (" + e.getMessage() + ")");
+        }
+        return Check.ofViolations("NO_DEAD_LETTERED_EVENTS", parked,
+                "nothing is parked on the dead-letter topic",
+                parked + " event(s) quarantined on the dead-letter topic; see RUNBOOK");
     }
 }
