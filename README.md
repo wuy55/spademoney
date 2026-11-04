@@ -27,7 +27,7 @@ staged; it is the same script anyone can run.
 
 | | |
 |---|---|
-| **Java 25, Spring Boot 4** | virtual threads, Jackson 3, `JdbcClient` with hand-written SQL |
+| **Java 25, Spring Boot 4** | Jackson 3, `JdbcClient` with hand-written SQL |
 | **PostgreSQL 16** | two databases, one per service — no cross-database transaction is possible |
 | **Redpanda** | Kafka-compatible; the outbox relay's transport |
 | **204 tests** | Testcontainers against real Postgres and a real broker |
